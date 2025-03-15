@@ -1,8 +1,8 @@
 """Unit tests for the translations backend functionality."""
 from django.test import TestCase
+from unittest.mock import patch
 from .models import Translation, EnglishWord
 from .utils.dict_converter import populate_english_dict, clear_english_dict
-
 
 class TranslationTests(TestCase):
     """Test suite for translation-related functionality."""
@@ -25,9 +25,12 @@ class TranslationTests(TestCase):
         self.assertIn("fire", gaps)  # 'fire' untranslated
         self.assertNotIn("water", gaps)  # 'water' translated
 
-    def test_update_dictionary(self):
+    @patch("translations.views.update_dictionary")
+    def test_update_dictionary(self, mock_update):
         """Test the update_dictionary API endpoint for dictionary updates."""
+        mock_update.return_value = 2  # Simulate 2 new words added
         response = self.client.get("/api/update-dictionary/")
         self.assertEqual(response.status_code, 200)
         data = response.json()
-        self.assertIn("status", data)
+        self.assertEqual(data["status"], "success")
+        self.assertEqual(data["new_words_added"], 2)

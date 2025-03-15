@@ -1,7 +1,8 @@
 """Django settings for the Voice of the Ancients backend."""
 from pathlib import Path
-from decouple import config
+from decouple import config  # Import config function for environment variables
 import os
+import sys
 
 # Build paths inside the project
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -61,7 +62,7 @@ DATABASES = {
     },
     "sqlite": {
         "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "translations.db",
+        "NAME": ":memory:" if "test" in sys.argv else BASE_DIR / "translations.db",
     },
 }
 
