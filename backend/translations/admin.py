@@ -1,13 +1,6 @@
-"""Admin interface configuration for managing translations and English words."""
+"""Admin interface configuration for managing English words."""
 from django.contrib import admin
-from .models import Translation, EnglishWord
-
-
-@admin.register(Translation)
-class TranslationAdmin(admin.ModelAdmin):
-    """Admin class for managing Translation entries."""
-    list_display = ("ojibwe_text", "english_text", "audio_url")
-
+from .models import EnglishWord
 
 @admin.register(EnglishWord)
 class EnglishWordAdmin(admin.ModelAdmin):

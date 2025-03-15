@@ -1,6 +1,6 @@
 """Django settings for the Voice of the Ancients backend."""
 from pathlib import Path
-from decouple import config  # Import config function for environment variables
+from decouple import config
 import os
 import sys
 
@@ -53,12 +53,11 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "vota_backend.wsgi.application"
 
-# Database configuration (djongo for MongoDB)
+# Database configuration (SQLite for Django, pymongo for MongoDB)
 DATABASES = {
     "default": {
-        "ENGINE": "djongo",
-        "NAME": "vota_db",
-        "CLIENT": {"host": config("MONGO_URI")},
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": BASE_DIR / "db.sqlite3",
     },
     "sqlite": {
         "ENGINE": "django.db.backends.sqlite3",

@@ -1,24 +1,44 @@
-"""Django ORM models for translation data management using MongoDB via djongo."""
-from djongo import models
+"""Models for translation data management using pymongo for MongoDB and Django ORM for SQLite."""
+from django.db import models
+from pymongo import MongoClient
+from decouple import config
 
+# MongoDB connection setup (direct pymongo access)
+client = MongoClient(config("MONGO_URI"))
+db = client["vota_db"]
+translations_collection = db["translations"]
 
-class Translation(models.Model):
-    """Model representing a translation entry in MongoDB."""
-    ojibwe_text = models.TextField()
-    english_text = models.TextField(null=True, blank=True)
-    audio_url = models.TextField(null=True, blank=True)
-    syllabary_text = models.TextField(null=True, blank=True)
-    other_lang_text = models.TextField(null=True, blank=True)
+# Utility functions for translation operations with pymongo
+def create_translation(
+    ojibwe_text,
+    english_text=None,
+    audio_url=None,
+    syllabary_text=None,
+    other_lang_text=None,
+):
+    """Insert a new translation into MongoDB."""
+    doc = {
+        "ojibwe_text": ojibwe_text,
+        "english_text": english_text,
+        "audio_url": audio_url,
+        "syllabary_text": syllabary_text,
+        "other_lang_text": other_lang_text,
+    }
+    return translations_collection.insert_one(doc)
 
-    class Meta:
-        """Meta options for the Translation model."""
-        db_table = "translations"
+def update_or_create_translation(ojibwe_text, defaults):
+    """Update or create a translation entry in MongoDB."""
+    existing = translations_collection.find_one({"ojibwe_text": ojibwe_text})
+    if existing:
+        translations_collection.update_one({"ojibwe_text": ojibwe_text}, {"$set": defaults})
+    else:
+        create_translation(ojibwe_text, **defaults)
 
-    def __str__(self) -> str:
-        """String representation of the Translation object."""
-        return self.ojibwe_text
+def get_all_translations():
+    """Retrieve all translations from MongoDB."""
+    return list(translations_collection.find())
 
-
+# Django ORM model for English words (stored in SQLite)
 class EnglishWord(models.Model):
     """Model representing an English word in SQLite."""
     word = models.TextField(primary_key=True)

@@ -1,7 +1,7 @@
 """Unit tests for the translations backend functionality."""
 from django.test import TestCase
 from unittest.mock import patch
-from .models import Translation, EnglishWord
+from .models import EnglishWord, create_translation, get_all_translations
 from .utils.dict_converter import populate_english_dict, clear_english_dict
 
 class TranslationTests(TestCase):
@@ -9,7 +9,7 @@ class TranslationTests(TestCase):
 
     def setUp(self):
         """Set up test data before each test."""
-        Translation.objects.create(ojibwe_text="nibi", english_text="water")
+        create_translation(ojibwe_text="nibi", english_text="water")
         populate_english_dict("../data/english_dict.json")
 
     def tearDown(self):
