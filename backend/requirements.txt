@@ -1,0 +1,10 @@
+# Python dependencies for Voice of the Ancients (VOTA) backend with Google Cloud Storage
+
+django==4.2.11                # Web framework for API and admin interface
+requests==2.31.0              # HTTP library for web scraping
+beautifulsoup4==4.12.3        # HTML parsing for scraping translation websites
+python-decouple==3.8          # Environment variable management (e.g., GCP credentials)
+pymongo==4.6.2                # MongoDB client for direct database operations
+google-cloud-storage==2.15.0  # Google Cloud Storage client for file uploads
+pytest==8.1.1                 # Testing framework for unit tests
+pytest-django==4.8.0          # Django-specific testing utilities
