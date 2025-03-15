@@ -1,14 +1,15 @@
-"""Admin interface configuration for managing translations."""
+"""Admin interface configuration for managing translations and English words."""
 from django.contrib import admin
-from .models import get_all_translations  # No ORM, so we use utility
+from .models import Translation, EnglishWord
 
-# Custom admin view to display translations
-@admin.register(lambda: None)  # Placeholder due to no ORM model
+
+@admin.register(Translation)
 class TranslationAdmin(admin.ModelAdmin):
-    """Custom admin class to manage translations manually."""
+    """Admin class for managing Translation entries."""
+    list_display = ("ojibwe_text", "english_text", "audio_url")
 
-    def get_queryset(self, request):
-        """Return a queryset of all translations."""
-        return get_all_translations()
 
-    list_display = ("ojibwe_text", "english_text", "audio_url")  # Columns to display
+@admin.register(EnglishWord)
+class EnglishWordAdmin(admin.ModelAdmin):
+    """Admin class for managing EnglishWord entries."""
+    list_display = ("word",)

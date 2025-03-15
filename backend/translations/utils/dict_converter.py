@@ -1,9 +1,10 @@
-"""Utility script to convert a JSON English dictionary to SQLite."""
+"""Utility script to populate the English dictionary table from a JSON file."""
 import json
 import sqlite3
 
-def json_to_sqlite(json_path: str, db_path: str = "translations.db") -> None:
-    """Convert a JSON file of English words to an SQLite database.
+
+def populate_english_dict(json_path: str, db_path: str = "translations.db") -> None:
+    """Populate the english_dict table in SQLite from a JSON file.
     Args:
         json_path (str): Path to the JSON file containing English words.
         db_path (str): Path to the SQLite database file (default: translations.db).
@@ -27,6 +28,20 @@ def json_to_sqlite(json_path: str, db_path: str = "translations.db") -> None:
 
     conn.commit()
     conn.close()
+    print(f"Populated {len(english_dict)} words into english_dict table")
+
+
+def clear_english_dict(db_path: str = "translations.db") -> None:
+    """Clear all entries from the english_dict table for testing.
+    Args:
+        db_path (str): Path to the SQLite database file (default: translations.db).
+    """
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM english_dict")
+    conn.commit()
+    conn.close()
+
 
 if __name__ == "__main__":
-    json_to_sqlite("../data/english_dict.json")
+    populate_english_dict("../data/english_dict.json")
