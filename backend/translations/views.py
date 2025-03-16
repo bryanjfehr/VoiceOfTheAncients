@@ -5,18 +5,12 @@ import sqlite3
 from .models import Translation, EnglishWord
 from .utils.fetch_dictionary import update_dictionary
 
+from .models import get_all_english_to_ojibwe
+
 def get_gaps(request):
-    """API endpoint to identify translation gaps between English and Ojibwe.
-    Returns a JSON response with a list of English words not translated.
-    """
-    # Load English dictionary from SQLite
     english_words = {word.word for word in EnglishWord.objects.all()}
-
-    # Get Ojibwe translations from MongoDB
-    translations = Translation.objects.all()
-    translated_english = {t.english_text for t in translations if t.english_text}
-
-    # Identify and return gaps
+    translations = get_all_english_to_ojibwe()
+    translated_english = {t["english_text"] if isinstance(t["english_text"], str) else t["english_text"][0] for t in translations}
     gaps = english_words - translated_english
     return JsonResponse({"gaps": list(gaps)})
 

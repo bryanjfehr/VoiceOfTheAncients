@@ -46,16 +46,22 @@ def create_ojibwe_to_english(ojibwe_text: str, english_text: list) -> None:
     }
     ojibwe_to_english.insert_one(doc)
 
-def update_or_create_english_to_ojibwe(english_text: str, ojibwe_text: str) -> None:
+
+def update_or_create_english_to_ojibwe(english_text: str, ojibwe_text: str, definition: str = "") -> None:
     """Update or create an English-to-Ojibwe translation entry in MongoDB."""
-    existing = english_to_ojibwe.find_one({"english_text": {"$in": [english_text.lower()] if isinstance(english_text, str) else [e.lower() for e in english_text]}})
+    existing = english_to_ojibwe.find_one({"english_text": english_text.lower()})
     if existing:
         english_to_ojibwe.update_one(
-            {"english_text": {"$in": [english_text.lower()] if isinstance(english_text, str) else [e.lower() for e in english_text]}},
-            {"$set": {"ojibwe_text": ojibwe_text.lower()}},
+            {"english_text": english_text.lower()},
+            {"$set": {"ojibwe_text": ojibwe_text.lower(), "definition": definition}},
         )
     else:
-        create_english_to_ojibwe(english_text, ojibwe_text)
+        doc = {
+            "english_text": english_text.lower(),
+            "ojibwe_text": ojibwe_text.lower(),
+            "definition": definition,
+        }
+        english_to_ojibwe.insert_one(doc)
 
 def update_or_create_ojibwe_to_english(ojibwe_text: str, english_text: list) -> None:
     """Update or create an Ojibwe-to-English translation entry in MongoDB."""
