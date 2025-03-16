@@ -3,9 +3,13 @@ import json
 import os
 from typing import Dict, List, Union
 import torch
+import warnings
 from transformers import AutoTokenizer, AutoModel
 import numpy as np
 from translations.models import get_all_english_to_ojibwe, get_all_ojibwe_to_english
+
+# Suppress FutureWarning from transformers
+warnings.filterwarnings("ignore", category=FutureWarning)
 
 # Base directory (three levels up from analysis.py to backend/)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -25,8 +29,8 @@ def get_semantic_similarity(text1: str, text2: str,
                            tokenizer: AutoTokenizer, model: AutoModel) -> float:
     """Calculate semantic similarity between two texts using BERT."""
     try:
-        inputs1 = tokenizer(text1, return_tensors="pt", padding=True, truncation=True, max_length=512)
-        inputs2 = tokenizer(text2, return_tensors="pt", padding=True, truncation=True, max_length=512)
+        inputs1 = tokenizer(text1, return_tensors="pt", padding=True, truncation=True, max_length=128)  # Reduced max_length
+        inputs2 = tokenizer(text2, return_tensors="pt", padding=True, truncation=True, max_length=128)
         with torch.no_grad():
             outputs1 = model(**inputs1).last_hidden_state.mean(dim=1).squeeze().numpy()
             outputs2 = model(**inputs2).last_hidden_state.mean(dim=1).squeeze().numpy()
@@ -37,28 +41,27 @@ def get_semantic_similarity(text1: str, text2: str,
         return 0.0
 
 
-def print_semantic_matches(threshold: float = 0.8) -> None:
+def print_semantic_matches(threshold: float = 0.8, max_words: int = 1000) -> None:
     """Analyze scraped translations and print semantic matches to fill gaps."""
     tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
     model = AutoModel.from_pretrained("bert-base-uncased")
 
     # Load English dictionary with absolute path
     json_path = os.path.join(BASE_DIR, "data", "english_dict.json")
-    print(f"Loading dictionary from: {json_path}")  # Debug
+    print(f"Loading dictionary from: {json_path}")
     english_dict = load_english_definitions(json_path)
     if not english_dict:
         print("Failed to load English dictionary. Skipping semantic analysis.")
         return
 
-    # Verify type
-    print(f"English dict type: {type(english_dict)}")  # Debug
+    print(f"English dict type: {type(english_dict)}")
 
     # Handle different JSON formats
     if isinstance(english_dict, dict):
-        pass  # Already in the right format
+        pass
     elif isinstance(english_dict, list):
         if all(isinstance(item, str) for item in english_dict):
-            english_dict = {word: word for word in english_dict}  # Fallback
+            english_dict = {word: word for word in english_dict}
         elif all(isinstance(item, dict) and "word" in item for item in english_dict):
             english_dict = {item["word"]: item.get("definition", item["word"])
                            for item in english_dict}
@@ -83,9 +86,13 @@ def print_semantic_matches(threshold: float = 0.8) -> None:
 
     print(f"Found {len(untranslated_words)} untranslated English words.")
 
-    # Analyze semantic matches (limit to 100 for testing)
+    # Limit to max_words for performance
+    untranslated_words = list(untranslated_words)[:max_words]
+    print(f"Processing {len(untranslated_words)} words for analysis.")
+
+    # Analyze semantic matches
     matches = []
-    for eng_word in list(untranslated_words)[:100]:
+    for eng_word in untranslated_words:
         eng_def = english_dict.get(eng_word, eng_word)
         for trans in ojibwe_translations:
             ojibwe_def = trans.get("definition", trans["ojibwe_text"])
