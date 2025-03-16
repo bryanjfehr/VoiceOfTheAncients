@@ -1,83 +1,72 @@
 """Module to fetch and update the English dictionary from a remote JSON source."""
 import requests
 import sqlite3
+import json
+import os
 from typing import Set, Dict, Any
+
 
 DICTIONARY_URL = "https://raw.githubusercontent.com/matthewreagan/WebstersEnglishDictionary/master/dictionary.json"
 
+# Base directory for the project
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+JSON_PATH = os.path.join(BASE_DIR, "data", "english_dict.json")
+
+
 def fetch_dictionary() -> Dict[str, Any]:
-    """Fetch the English dictionary from a remote JSON source.
-    Returns:
-        Dict[str, Any]: Dictionary with words as keys and definitions as values.
-    Raises:
-        requests.RequestException: If the fetch fails.
-    """
+    """Fetch the English dictionary from a remote JSON source."""
     response = requests.get(DICTIONARY_URL, timeout=10)
-    response.raise_for_status()  # Raise exception for bad status codes
+    response.raise_for_status()
     return response.json()
 
+
 def get_existing_words(db_path: str = "translations.db") -> Set[str]:
-    """Retrieve all existing words from the SQLite english_dict table.
-    Creates the table if it doesn't exist.
-    Args:
-        db_path (str): Path to the SQLite database file.
-    Returns:
-        Set[str]: Set of existing English words.
-    """
+    """Retrieve all existing words from the SQLite english_dict table."""
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
-    # Ensure the table exists
-    cursor.execute(
-        """
-        CREATE TABLE IF NOT EXISTS english_dict (
-            word TEXT PRIMARY KEY
-        )
-        """
-    )
+    cursor.execute("CREATE TABLE IF NOT EXISTS english_dict (word TEXT PRIMARY KEY)")
     conn.commit()
-    # Fetch existing words
     cursor.execute("SELECT word FROM english_dict")
     existing_words = {row[0] for row in cursor.fetchall()}
     conn.close()
     return existing_words
 
-def update_dictionary(db_path: str = "translations.db") -> int:
-    """Fetch the latest dictionary and update the SQLite database with new words.
-    Args:
-        db_path (str): Path to the SQLite database file.
-    Returns:
-        int: Number of new words added.
-    """
+
+def update_dictionary(db_path: str = "translations.db", json_path: str = JSON_PATH) -> int:
+    """Fetch the latest dictionary, update SQLite, and save to JSON."""
     try:
-        # Fetch the dictionary
         dictionary_data = fetch_dictionary()
         new_words = set(dictionary_data.keys())
 
-        # Get existing words
-        existing_words = get_existing_words(db_path)
+        # Ensure the data directory exists
+        os.makedirs(os.path.dirname(json_path), exist_ok=True)
 
-        # Determine new words to add
+        # Save to JSON
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(dictionary_data, f)
+        print(f"Saved dictionary to {json_path}")
+
+        # Update SQLite (adjust db_path if needed)
+        db_full_path = os.path.join(BASE_DIR, db_path)
+        existing_words = get_existing_words(db_full_path)
         words_to_add = new_words - existing_words
         if not words_to_add:
-            print("No new words to add.")
+            print("No new words to add to SQLite.")
             return 0
 
-        # Update the database
-        conn = sqlite3.connect(db_path)
+        conn = sqlite3.connect(db_full_path)
         cursor = conn.cursor()
         for word in words_to_add:
-            cursor.execute(
-                "INSERT OR IGNORE INTO english_dict (word) VALUES (?)", (word,)
-            )
+            cursor.execute("INSERT OR IGNORE INTO english_dict (word) VALUES (?)", (word,))
         conn.commit()
         conn.close()
 
-        print(f"Added {len(words_to_add)} new words to the dictionary.")
+        print(f"Added {len(words_to_add)} new words to SQLite.")
         return len(words_to_add)
-
     except requests.RequestException as e:
         print(f"Failed to fetch dictionary: {e}")
         return 0
+
 
 if __name__ == "__main__":
     update_dictionary()

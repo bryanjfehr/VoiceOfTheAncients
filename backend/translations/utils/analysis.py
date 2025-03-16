@@ -1,13 +1,17 @@
 """Semantic analysis using Transformers to match English and Ojibwe definitions."""
 import json
-from typing import Dict, List
+import os
+from typing import Dict, List, Union
 import torch
 from transformers import AutoTokenizer, AutoModel
 import numpy as np
 from translations.models import get_all_english_to_ojibwe, get_all_ojibwe_to_english
 
+# Base directory (three levels up from analysis.py to backend/)
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-def load_english_definitions(json_path: str) -> Dict[str, str]:
+
+def load_english_definitions(json_path: str) -> Union[Dict[str, str], List[str]]:
     """Load English words and definitions from a JSON file."""
     try:
         with open(json_path, "r", encoding="utf-8") as f:
@@ -21,16 +25,11 @@ def get_semantic_similarity(text1: str, text2: str,
                            tokenizer: AutoTokenizer, model: AutoModel) -> float:
     """Calculate semantic similarity between two texts using BERT."""
     try:
-        # Tokenize inputs
         inputs1 = tokenizer(text1, return_tensors="pt", padding=True, truncation=True, max_length=512)
         inputs2 = tokenizer(text2, return_tensors="pt", padding=True, truncation=True, max_length=512)
-
-        # Get embeddings
         with torch.no_grad():
             outputs1 = model(**inputs1).last_hidden_state.mean(dim=1).squeeze().numpy()
             outputs2 = model(**inputs2).last_hidden_state.mean(dim=1).squeeze().numpy()
-
-        # Cosine similarity
         return float(np.dot(outputs1, outputs2) /
                      (np.linalg.norm(outputs1) * np.linalg.norm(outputs2)))
     except Exception as e:
@@ -40,14 +39,34 @@ def get_semantic_similarity(text1: str, text2: str,
 
 def print_semantic_matches(threshold: float = 0.8) -> None:
     """Analyze scraped translations and print semantic matches to fill gaps."""
-    # Initialize BERT model and tokenizer
     tokenizer = AutoTokenizer.from_pretrained("bert-base-uncased")
     model = AutoModel.from_pretrained("bert-base-uncased")
 
-    # Load English dictionary
-    english_dict = load_english_definitions("../data/english_dict.json")  # Adjusted path
+    # Load English dictionary with absolute path
+    json_path = os.path.join(BASE_DIR, "data", "english_dict.json")
+    print(f"Loading dictionary from: {json_path}")  # Debug
+    english_dict = load_english_definitions(json_path)
     if not english_dict:
         print("Failed to load English dictionary. Skipping semantic analysis.")
+        return
+
+    # Verify type
+    print(f"English dict type: {type(english_dict)}")  # Debug
+
+    # Handle different JSON formats
+    if isinstance(english_dict, dict):
+        pass  # Already in the right format
+    elif isinstance(english_dict, list):
+        if all(isinstance(item, str) for item in english_dict):
+            english_dict = {word: word for word in english_dict}  # Fallback
+        elif all(isinstance(item, dict) and "word" in item for item in english_dict):
+            english_dict = {item["word"]: item.get("definition", item["word"])
+                           for item in english_dict}
+        else:
+            print("Unknown list format in english_dict.json. Skipping analysis.")
+            return
+    else:
+        print("Unsupported format in english_dict.json. Skipping analysis.")
         return
 
     # Get all scraped translations from MongoDB
@@ -66,12 +85,10 @@ def print_semantic_matches(threshold: float = 0.8) -> None:
 
     # Analyze semantic matches (limit to 100 for testing)
     matches = []
-    for eng_word in list(untranslated_words)[:100]:  # Limit for speed
-        eng_def = english_dict.get(eng_word, "")
-        if not eng_def:
-            continue
+    for eng_word in list(untranslated_words)[:100]:
+        eng_def = english_dict.get(eng_word, eng_word)
         for trans in ojibwe_translations:
-            ojibwe_def = trans.get("definition", "")
+            ojibwe_def = trans.get("definition", trans["ojibwe_text"])
             if not ojibwe_def:
                 continue
             similarity = get_semantic_similarity(eng_def, ojibwe_def, tokenizer, model)
