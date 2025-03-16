@@ -1,2 +1,4 @@
 backend/.env
 backend/venv/*
+backend/initialize_env.ps1
+backend/VOTA initializer.lnk
