@@ -1,42 +1,83 @@
 """Models for translation data management using pymongo for MongoDB and Django ORM for SQLite."""
 from django.db import models
 from pymongo import MongoClient
+from pymongo.errors import CollectionInvalid, DatabaseError
 from decouple import config
 
-# MongoDB connection setup (direct pymongo access)
+# MongoDB connection setup
 client = MongoClient(config("MONGO_URI"))
-db = client["vota_db"]
-translations_collection = db["translations"]
+
+# Check if database exists, create if not
+try:
+    db = client["vota_db"]
+    # Create collections if they don't exist
+    try:
+        db.create_collection("english_to_ojibwe")
+        print("Created 'english_to_ojibwe' collection.")
+    except CollectionInvalid:
+        print("Collection 'english_to_ojibwe' already exists.")
+    try:
+        db.create_collection("ojibwe_to_english")
+        print("Created 'ojibwe_to_english' collection.")
+    except CollectionInvalid:
+        print("Collection 'ojibwe_to_english' already exists.")
+except DatabaseError:
+    print("Error accessing or creating database 'vota_db'. Creating new database.")
+    db = client["vota_db"]  # Force creation
+
+# Define collections
+english_to_ojibwe = db["english_to_ojibwe"]
+ojibwe_to_english = db["ojibwe_to_english"]
 
 # Utility functions for translation operations with pymongo
-def create_translation(
-    ojibwe_text,
-    english_text=None,
-    audio_url=None,
-    syllabary_text=None,
-    other_lang_text=None,
-):
-    """Insert a new translation into MongoDB."""
+def create_english_to_ojibwe(english_text: str, ojibwe_text: str) -> None:
+    """Insert a new English-to-Ojibwe translation into MongoDB."""
     doc = {
-        "ojibwe_text": ojibwe_text,
-        "english_text": english_text,
-        "audio_url": audio_url,
-        "syllabary_text": syllabary_text,
-        "other_lang_text": other_lang_text,
+        "english_text": english_text.lower().split(", "),  # Handle multiple translations
+        "ojibwe_text": ojibwe_text.lower(),
     }
-    return translations_collection.insert_one(doc)
+    english_to_ojibwe.insert_one(doc)
 
-def update_or_create_translation(ojibwe_text, defaults):
-    """Update or create a translation entry in MongoDB."""
-    existing = translations_collection.find_one({"ojibwe_text": ojibwe_text})
+def create_ojibwe_to_english(ojibwe_text: str, english_text: list) -> None:
+    """Insert a new Ojibwe-to-English translation into MongoDB."""
+    doc = {
+        "ojibwe_text": ojibwe_text.lower(),
+        "english_text": [e.lower() for e in english_text],  # Store as list for multiple translations
+    }
+    ojibwe_to_english.insert_one(doc)
+
+def update_or_create_english_to_ojibwe(english_text: str, ojibwe_text: str) -> None:
+    """Update or create an English-to-Ojibwe translation entry in MongoDB."""
+    existing = english_to_ojibwe.find_one({"english_text": {"$in": [english_text.lower()]}})
     if existing:
-        translations_collection.update_one({"ojibwe_text": ojibwe_text}, {"$set": defaults})
+        english_to_ojibwe.update_one(
+            {"english_text": {"$in": [english_text.lower()]}},
+            {"$set": {"ojibwe_text": ojibwe_text.lower()}},
+        )
     else:
-        create_translation(ojibwe_text, **defaults)
+        create_english_to_ojibwe(english_text, ojibwe_text)
 
-def get_all_translations():
-    """Retrieve all translations from MongoDB."""
-    return list(translations_collection.find())
+def update_or_create_ojibwe_to_english(ojibwe_text: str, english_text: str) -> None:
+    """Update or create an Ojibwe-to-English translation entry in MongoDB."""
+    existing = ojibwe_to_english.find_one({"ojibwe_text": ojibwe_text.lower()})
+    english_texts = english_text.lower().split(", ")
+    if existing:
+        current_english = existing.get("english_text", [])
+        updated_english = list(set(current_english + english_texts))  # Avoid duplicates
+        ojibwe_to_english.update_one(
+            {"ojibwe_text": ojibwe_text.lower()},
+            {"$set": {"english_text": updated_english}},
+        )
+    else:
+        create_ojibwe_to_english(ojibwe_text, english_texts)
+
+def get_all_english_to_ojibwe() -> list[dict]:
+    """Retrieve all English-to-Ojibwe translations from MongoDB."""
+    return list(english_to_ojibwe.find())
+
+def get_all_ojibwe_to_english() -> list[dict]:
+    """Retrieve all Ojibwe-to-English translations from MongoDB."""
+    return list(ojibwe_to_english.find())
 
 # Django ORM model for English words (stored in SQLite)
 class EnglishWord(models.Model):
