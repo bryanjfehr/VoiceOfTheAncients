@@ -1,6 +1,7 @@
 # Python dependencies for Voice of the Ancients (VOTA) backend with Google Cloud Storage
 
 django==5.1.7                 # Latest LTS version for API and admin interface
+django-cors-headers==4.3.1    # Cross-origin resource sharing for frontend requests
 requests==2.31.0              # HTTP library for web scraping
 beautifulsoup4==4.12.3        # HTML parsing for scraping translation websites
 python-decouple==3.8          # Environment variable management (e.g., GCP credentials)
