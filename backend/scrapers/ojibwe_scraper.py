@@ -271,7 +271,6 @@ async def scrape_ojibwe_page(
         print(f"Found translation for '{word}': {ojibwe_text}")
     return translations
 
-
 async def scrape_full_dictionary(base_url: str) -> List[Dict[str, Union[str, List[str]]]]:
     """Scrape the entire dictionary from a single website asynchronously.
 

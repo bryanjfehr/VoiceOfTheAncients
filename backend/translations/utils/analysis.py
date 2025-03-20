@@ -253,7 +253,29 @@ def print_semantic_matches(threshold: float = 0.8) -> bool:
 
     # Sort matches by similarity (ascending order, highest scores at the bottom)
     matches.sort(key=lambda x: x["similarity"])  # Ascending order
+    
+    # Save matches to a JSON file
+    matches_path = os.path.join(BASE_DIR, "data", "semantic_matches.json")
+    with open(matches_path, "w", encoding="utf-8") as f:
+        json.dump(matches, f, indent=2)
+    print(f"Saved {len(matches)} matches to {matches_path}")
 
+    # Print results
+    if matches:
+        print(f"Found {len(matches)} potential semantic matches:")
+        for match in matches:
+            print(
+                f"  {match['english_text']} -> {match['ojibwe_text']} "
+                f"(Similarity: {match['similarity']:.2f})"
+            )
+        # Print a summary of similarity scores
+        similarities = [match["similarity"] for match in matches]
+        print("\nSimilarity Score Summary:")
+        print(f"  Minimum Similarity: {min(similarities):.2f}")
+        print(f"  Maximum Similarity: {max(similarities):.2f}")
+        print(f"  Average Similarity: {np.mean(similarities):.2f}")
+    else:
+        print("No semantic matches found above threshold.")
     # Print results
     if matches:
         print(f"Found {len(matches)} potential semantic matches:")

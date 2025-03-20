@@ -15,3 +15,4 @@ torch==2.3.1+cu121 --extra-index-url https://download.pytorch.org/whl/cu121 # Fo
 numpy<2.0                     # For numerical operations with transformers and consistency with Torch deps
 wordfreq==3.1.1               # Word frequency data for language detection
 aiohttp==3.9.5                # Asynchronous HTTP client for concurrent requests
+djangorestframework==3.15.2   # REST API framework for Django

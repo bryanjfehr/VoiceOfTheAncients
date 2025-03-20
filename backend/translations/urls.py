@@ -1,8 +1,17 @@
-"""URL configuration for the translations app."""
+# translations/urls.py
 from django.urls import path
-from . import views
+from .views import (
+    UpdateDictionaryView,
+    EnglishToOjibweListView,
+    OjibweToEnglishListView,
+    SemanticMatchesView,
+    MissingCommonTranslationsView,
+)
 
 urlpatterns = [
-    path("gaps/", views.get_gaps, name="get_gaps"),
-    path("update-dictionary/", views.update_dictionary, name="update_dictionary"),
+    path('update-dictionary/', UpdateDictionaryView.as_view(), name='update-dictionary'),
+    path('english-to-ojibwe/', EnglishToOjibweListView.as_view(), name='english-to-ojibwe'),
+    path('ojibwe-to-english/', OjibweToEnglishListView.as_view(), name='ojibwe-to-english'),
+    path('semantic-matches/', SemanticMatchesView.as_view(), name='semantic-matches'),
+    path('missing-common-translations/', MissingCommonTranslationsView.as_view(), name='missing-common-translations'),
 ]
