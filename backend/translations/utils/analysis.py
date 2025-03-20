@@ -7,9 +7,8 @@ processing batches of words.
 """
 import json
 import os
-from typing import Dict, List, Union, Tuple, Set
+from typing import Dict, List, Union, Set
 import warnings
-from translations.utils.frequencies import WORD_FREQUENCIES
 
 import torch
 import numpy as np
@@ -21,6 +20,7 @@ from translations.models import (
     update_or_create_english_to_ojibwe,
     update_or_create_ojibwe_to_english,
 )
+from translations.utils.frequencies import WORD_FREQUENCIES
 
 # Suppress FutureWarning from transformers
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -112,13 +112,12 @@ def batch_get_embeddings(
         with torch.no_grad():
             outputs = model(**inputs).last_hidden_state.mean(dim=1).cpu().numpy()
         embeddings.append(outputs)
+        # Clear memory
+        torch.cuda.empty_cache() if torch.cuda.is_available() else None
     return np.vstack(embeddings)
 
 
-def print_semantic_matches(
-    threshold: float = 0.8,
-    batch_size: int = 1000,
-) -> bool:
+def print_semantic_matches(threshold: float = 0.8) -> bool:
     """Analyze translations and print semantic matches to fill gaps.
 
     This function loads English and Ojibwe definitions, computes their embeddings
@@ -128,8 +127,6 @@ def print_semantic_matches(
 
     Args:
         threshold (float): Minimum similarity score for a match. Defaults to 0.8.
-        batch_size (int): Number of English words to process in this batch.
-            Defaults to 1000.
 
     Returns:
         bool: True if the user wants to continue with the next batch, False otherwise.
@@ -203,8 +200,8 @@ def print_semantic_matches(
         print("No more untranslated words to process.")
         return False
 
-    # Limit to batch_size
-    batch_words = remaining_words[:batch_size]
+    # Process all remaining words
+    batch_words = remaining_words
     print(f"Processing {len(batch_words)} words for analysis.")
 
     # Precompute embeddings for Ojibwe definitions
@@ -254,6 +251,9 @@ def print_semantic_matches(
     processed_words.update(batch_words)
     save_processed_words(processed_words, processed_path)
 
+    # Sort matches by similarity (ascending order, highest scores at the bottom)
+    matches.sort(key=lambda x: x["similarity"])  # Ascending order
+
     # Print results
     if matches:
         print(f"Found {len(matches)} potential semantic matches:")
@@ -262,18 +262,19 @@ def print_semantic_matches(
                 f"  {match['english_text']} -> {match['ojibwe_text']} "
                 f"(Similarity: {match['similarity']:.2f})"
             )
+        # Print a summary of similarity scores
+        similarities = [match["similarity"] for match in matches]
+        print("\nSimilarity Score Summary:")
+        print(f"  Minimum Similarity: {min(similarities):.2f}")
+        print(f"  Maximum Similarity: {max(similarities):.2f}")
+        print(f"  Average Similarity: {np.mean(similarities):.2f}")
     else:
         print("No semantic matches found above threshold.")
 
-    # Prompt to continue if there are more words
-    if remaining_words[batch_size:]:
-        response = input(
-            f"\nContinue analyzing the next {batch_size} words? (Y/n): "
-        ).strip().lower()
-        return response in ("", "y", "yes")
-    return False
+    # Prompt to continue
+    response = input("\nRun semantic analysis again? (Y/n): ").strip().lower()
+    return response in ("", "y", "yes")
 
 
 if __name__ == "__main__":
-    while print_semantic_matches():
-        pass
+    print_semantic_matches()

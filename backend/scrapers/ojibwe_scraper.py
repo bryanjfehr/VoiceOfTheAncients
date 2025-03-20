@@ -2,19 +2,17 @@
 
 This module scrapes translations from online sources, stores them in MongoDB,
 and tracks attempted words to avoid redundant scraping. It prioritizes untranslated
-words by frequency of usage.
+words by frequency of usage using asynchronous requests for efficiency.
 """
-import json
 import os
 import sys
 import time
 from typing import List, Dict, Set, Union
 import sqlite3
-
-import requests
+import asyncio
+import aiohttp
 from bs4 import BeautifulSoup
-from requests.adapters import HTTPAdapter
-from urllib3.util.retry import Retry
+import json
 
 # Add the base directory to the system path
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -37,11 +35,14 @@ from translations.utils.get_dict_size import get_english_dict_size
 # Base URLs for scraping
 URLS = [
     "https://ojibwe.lib.umn.edu",  # Ojibwe People's Dictionary
-    "https://glosbe.com/oj/en",    # Glosbe Ojibwe-to-English
+    "https://glosbe.com/en/oj",    # Glosbe English-to-Ojibwe
 ]
 
 # Threshold for initial full scrape
 TRANSLATION_THRESHOLD = 0.2  # 20% threshold
+
+# Limit the number of words to scrape per run
+SCRAPE_LIMIT = 1000  # Process only 1000 words per run
 
 # Custom Ojibwe alphabet set for pagination
 OJIBWE_ALPHABET = {
@@ -49,15 +50,13 @@ OJIBWE_ALPHABET = {
     'b', 'd', 'g', 'h', 'j', 'k', 'm', 'n', 'p', 's', 't', 'w', 'y', 'z', 'zh',
 }
 
-# Set up retry mechanism for requests
-session = requests.Session()
-retries = Retry(
-    total=3,
-    backoff_factor=1,
-    status_forcelist=[429, 500, 502, 503, 504],
-)
-session.mount("http://", HTTPAdapter(max_retries=retries))
-session.mount("https://", HTTPAdapter(max_retries=retries))
+# HTTP headers to avoid being blocked
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    ),
+}
 
 
 def get_existing_translations_count() -> int:
@@ -133,59 +132,193 @@ def save_attempted_words(attempted_words: Set[str], attempted_path: str) -> None
         json.dump(list(attempted_words), file)
 
 
-def scrape_full_dictionary(base_url: str) -> List[Dict[str, Union[str, List[str]]]]:
-    """Scrape the entire dictionary from a single website, including definitions.
+def load_progress(progress_path: str) -> Dict[str, str]:
+    """Load the scraping progress from a JSON file.
+
+    Args:
+        progress_path (str): Path to the JSON file storing progress.
+
+    Returns:
+        Dict[str, str]: Dictionary mapping URLs to the last word scraped.
+    """
+    try:
+        with open(progress_path, "r", encoding="utf-8") as file:
+            return json.load(file)
+    except FileNotFoundError:
+        return {url: "" for url in URLS}
+
+
+def save_progress(progress: Dict[str, str], progress_path: str) -> None:
+    """Save the scraping progress to a JSON file.
+
+    Args:
+        progress (Dict[str, str]): Dictionary mapping URLs to the last word scraped.
+        progress_path (str): Path to the JSON file to store progress.
+    """
+    with open(progress_path, "w", encoding="utf-8") as file:
+        json.dump(progress, file)
+
+
+async def fetch_url(session: aiohttp.ClientSession, url: str, semaphore: asyncio.Semaphore) -> str:
+    """Fetch a URL asynchronously using aiohttp with a semaphore for rate limiting.
+
+    Args:
+        session (aiohttp.ClientSession): The aiohttp session to use for the request.
+        url (str): The URL to fetch.
+        semaphore (asyncio.Semaphore): Semaphore to limit concurrent requests.
+
+    Returns:
+        str: The HTML content of the page.
+
+    Raises:
+        aiohttp.ClientError: If the request fails.
+    """
+    async with semaphore:
+        try:
+            async with session.get(url, headers=HEADERS, timeout=10) as response:
+                response.raise_for_status()
+                return await response.text()
+        except aiohttp.ClientError as e:
+            print(f"Error fetching {url}: {e}")
+            return ""
+
+
+async def scrape_ojibwe_page(
+    session: aiohttp.ClientSession,
+    base_url: str,
+    word: str,
+    semaphore: asyncio.Semaphore,
+) -> List[Dict[str, Union[str, List[str]]]]:
+    """Scrape a single Ojibwe translation page for a given word.
+
+    Args:
+        session (aiohttp.ClientSession): The aiohttp session for making requests.
+        base_url (str): Base URL of the site to scrape.
+        word (str): The English word to look up.
+        semaphore (asyncio.Semaphore): Semaphore to limit concurrent requests.
+
+    Returns:
+        List[Dict[str, Union[str, List[str]]]]: List of translation dictionaries.
+    """
+    translations: List[Dict[str, Union[str, List[str]]]] = []
+    if "ojibwe.lib" in base_url:
+        url = f"{base_url}?utf8=%E2%9C%93&q={word}&search_field=all_fields"
+    else:  # Glosbe
+        url = f"{base_url}/{word}"
+
+    print(f"Debug: Requesting {url}")
+    html = await fetch_url(session, url, semaphore)
+    if not html:
+        return translations
+
+    print(f"Debug: Parsed HTML, length of content: {len(html)} characters")
+    soup = BeautifulSoup(html, "html.parser")
+
+    ojibwe_text = None
+    english_text = word
+
+    if "ojibwe.lib" in base_url:
+        entry = soup.select_one(".search-results .main-entry-search")
+        print(f"Debug: Found {entry is not None} .main-entry-search entry")
+        if entry:
+            english_div = entry.select_one(".english-search-main-entry")
+            if english_div:
+                lemma_span = english_div.select_one(".main-entry-title .lemma")
+                ojibwe_text = lemma_span.text.strip() if lemma_span else "N/A"
+                full_text = english_div.get_text(separator=" ").strip()
+                english = full_text.replace(ojibwe_text, "").strip()
+                english_texts = [
+                    e.strip() for e in english.split(",")
+                    if e.strip() and e.lower() != ojibwe_text.lower()
+                ]
+                print(
+                    f"Debug: Found Ojibwe: {ojibwe_text is not None}, "
+                    f"English: {bool(english_texts)}"
+                )
+                if ojibwe_text and english_texts:
+                    translations.append({
+                        "ojibwe_text": ojibwe_text,
+                        "english_text": english_texts,
+                        "definition": full_text,
+                    })
+                    update_or_create_ojibwe_to_english(ojibwe_text, english_texts)
+                    for e_text in english_texts:
+                        update_or_create_english_to_ojibwe(e_text, ojibwe_text)
+
+    elif "glosbe.com" in base_url:
+        # Find all translation items
+        translation_items = soup.select("div.translation__item")
+        print(f"Debug: Found {len(translation_items)} .translation__item entries")
+        for item in translation_items:
+            # Look for the Ojibwe translation using lang="oj"
+            ojibwe_span = item.find("span", attrs={"lang": "oj"})
+            # Look for the English definition using class="py-1"
+            english_def_span = item.find("span", class_="py-1")
+            if ojibwe_span:
+                ojibwe_text = ojibwe_span.text.strip()
+                # Use the input word as the English text, and definition if available
+                definition = english_def_span.text.strip() if english_def_span else f"{ojibwe_text}: {english_text}"
+                print(f"Debug: Found Ojibwe: {ojibwe_text}, English: {english_text}")
+                translations.append({
+                    "ojibwe_text": ojibwe_text,
+                    "english_text": [english_text],
+                    "definition": definition,
+                })
+                update_or_create_ojibwe_to_english(ojibwe_text, [english_text])
+                update_or_create_english_to_ojibwe(english_text, ojibwe_text)
+
+    if ojibwe_text:
+        print(f"Found translation for '{word}': {ojibwe_text}")
+    return translations
+
+
+async def scrape_full_dictionary(base_url: str) -> List[Dict[str, Union[str, List[str]]]]:
+    """Scrape the entire dictionary from a single website asynchronously.
 
     Args:
         base_url (str): Base URL of the site to scrape (e.g., ojibwe.lib.umn.edu).
 
     Returns:
-        List[Dict[str, Union[str, List[str]]]]: List of dictionaries containing
-            translations and definitions.
+        List[Dict[str, Union[str, List[str]]]]: List of translation dictionaries.
     """
     translations: List[Dict[str, Union[str, List[str]]]] = []
-    try:
+    semaphore = asyncio.Semaphore(10)  # Limit to 10 concurrent requests
+    async with aiohttp.ClientSession() as session:
         if "ojibwe.lib" in base_url:
             # Paginate through /browse/ojibwe/{letter} using Ojibwe alphabet
             for letter in OJIBWE_ALPHABET:
                 url = f"{base_url}/browse/ojibwe/{letter}"
                 print(f"Debug: Attempting to scrape {url}")
-                response = session.get(url, timeout=10)
-                response.raise_for_status()
-                print(f"Debug: Received response with status {response.status_code}")
-                soup = BeautifulSoup(response.text, "html.parser")
-                print(f"Debug: Parsed HTML, length of content: {len(response.text)} characters")
+                html = await fetch_url(session, url, semaphore)
+                if not html:
+                    continue
+
+                print(f"Debug: Parsed HTML, length of content: {len(html)} characters")
+                soup = BeautifulSoup(html, "html.parser")
 
                 entries = soup.select(".search-results .main-entry-search")
                 print(f"Debug: Found {len(entries)} .main-entry-search entries")
                 for entry in entries:
                     english_div = entry.select_one(".english-search-main-entry")
                     if english_div:
-                        # Extract Ojibwe term from lemma
                         lemma_span = english_div.select_one(".main-entry-title .lemma")
                         ojibwe_text = lemma_span.text.strip() if lemma_span else "N/A"
-
-                        # Extract full text as potential definition
                         full_text = english_div.get_text(separator=" ").strip()
-
-                        # Isolate English translations by removing Ojibwe term
                         english = full_text.replace(ojibwe_text, "").strip()
                         english_texts = [
                             e.strip() for e in english.split(",")
                             if e.strip() and e.lower() != ojibwe_text.lower()
                         ]
-
                         print(
                             f"Debug: Found Ojibwe: {ojibwe_text is not None}, "
                             f"English: {bool(english_texts)}"
                         )
                         if ojibwe_text and english_texts:
-                            translation = {
+                            translations.append({
                                 "ojibwe_text": ojibwe_text,
                                 "english_text": english_texts,
                                 "definition": full_text,
-                            }
-                            translations.append(translation)
+                            })
                             update_or_create_ojibwe_to_english(ojibwe_text, english_texts)
                             for e_text in english_texts:
                                 update_or_create_english_to_ojibwe(e_text, ojibwe_text)
@@ -200,61 +333,19 @@ def scrape_full_dictionary(base_url: str) -> List[Dict[str, Union[str, List[str]
                             )
                     else:
                         print("Debug: No .english-search-main-entry found in this entry")
-                time.sleep(1)  # Delay to avoid rate limiting
+                await asyncio.sleep(0.1)  # Small delay to avoid rate limiting
 
         elif "glosbe.com" in base_url:
-            # Fetch all English words
             english_words = get_english_words()
-            for word in english_words:
-                url = f"{base_url}/{word}"
-                print(f"Debug: Attempting to scrape {url}")
-                try:
-                    response = session.get(url, timeout=10)
-                    response.raise_for_status()
-                    print(f"Debug: Received response with status {response.status_code}")
-                    soup = BeautifulSoup(response.text, "html.parser")
-                    print(
-                        f"Debug: Parsed HTML, length of content: "
-                        f"{len(response.text)} characters"
-                    )
+            tasks = [
+                scrape_ojibwe_page(session, base_url, word, semaphore)
+                for word in english_words[:SCRAPE_LIMIT]  # Apply limit here
+            ]
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for result in results:
+                if isinstance(result, list):
+                    translations.extend(result)
 
-                    entries = soup.select(".translation")
-                    print(f"Debug: Found {len(entries)} .translation entries")
-                    for entry in entries:
-                        ojibwe = entry.find("span", class_="translation-term")
-                        english = entry.find("span", class_="translation-translation")
-                        print(
-                            f"Debug: Found Ojibwe: {ojibwe is not None}, "
-                            f"English: {english is not None}"
-                        )
-                        if ojibwe and english:
-                            ojibwe_text = ojibwe.text.strip()
-                            english_text = english.text.strip()
-                            definition = f"{ojibwe_text}: {english_text}"  # Placeholder
-                            translation = {
-                                "ojibwe_text": ojibwe_text,
-                                "english_text": [english_text],
-                                "definition": definition,
-                            }
-                            translations.append(translation)
-                            update_or_create_ojibwe_to_english(ojibwe_text, [english_text])
-                            update_or_create_english_to_ojibwe(english_text, ojibwe_text)
-                            print(
-                                f"Debug: Added translation - Ojibwe: {ojibwe_text}, "
-                                f"English: {english_text}"
-                            )
-                        else:
-                            print(
-                                f"Debug: Failed to extract translation for entry: "
-                                f"{entry.prettify()[:200]}..."
-                            )
-                except requests.RequestException as e:
-                    print(f"Error scraping {url}: {e}")
-                    continue
-                time.sleep(1)  # Delay to avoid rate limiting
-
-    except Exception as e:
-        print(f"Error scraping full dictionary from {base_url}: {e}")
     return translations
 
 
@@ -295,8 +386,8 @@ def get_missing_words() -> List[str]:
         return []
 
 
-def scrape_ojibwe() -> List[Dict[str, Union[str, List[str]]]]:
-    """Scrape Ojibwe translations based on coverage threshold.
+async def scrape_ojibwe_async() -> List[Dict[str, Union[str, List[str]]]]:
+    """Scrape Ojibwe translations asynchronously based on coverage threshold.
 
     Performs a full scrape if less than 20% of words are translated, otherwise
     targets missing words. Tracks attempted words to avoid redundant scraping.
@@ -308,9 +399,11 @@ def scrape_ojibwe() -> List[Dict[str, Union[str, List[str]]]]:
     dict_size = get_english_dict_size()
     translation_count = get_existing_translations_count()
 
-    # Load attempted words
+    # Load attempted words and progress
     attempted_path = os.path.join(BASE_DIR, "data", "scraped_words.json")
+    progress_path = os.path.join(BASE_DIR, "data", "scrape_progress.json")
     attempted_words = load_attempted_words(attempted_path)
+    progress = load_progress(progress_path)
 
     if should_perform_full_scrape():
         print(
@@ -318,7 +411,7 @@ def scrape_ojibwe() -> List[Dict[str, Union[str, List[str]]]]:
             "Performing full scrape."
         )
         for base_url in URLS:
-            translations.extend(scrape_full_dictionary(base_url))
+            translations.extend(await scrape_full_dictionary(base_url))
     else:
         missing_words = get_missing_words()
         if not missing_words:
@@ -331,113 +424,59 @@ def scrape_ojibwe() -> List[Dict[str, Union[str, List[str]]]]:
             print("All missing words have been attempted. Resetting attempted list.")
             attempted_words.clear()
             remaining_words = missing_words
+            progress = {url: "" for url in URLS}  # Reset progress
+            save_progress(progress, progress_path)
         else:
             print(
                 f"Found {len(remaining_words)} unattempted missing words out of "
                 f"{len(missing_words)} total missing words."
             )
 
-        print(f"Attempting to find translations for {len(remaining_words)} words.")
-        for word in remaining_words:
-            for base_url in URLS:
-                try:
-                    # Construct query URL for each site
-                    if "ojibwe.lib" in base_url:
-                        url = f"{base_url}?utf8=%E2%9C%93&q={word}&search_field=all_fields"
-                    elif "glosbe.com" in base_url:
-                        url = f"{base_url}/{word}"
+        # Apply the scrape limit
+        words_to_scrape = remaining_words[:SCRAPE_LIMIT]
+        print(f"Attempting to find translations for {len(words_to_scrape)} words (limited to {SCRAPE_LIMIT}).")
+        semaphore = asyncio.Semaphore(10)  # Limit to 10 concurrent requests
+        async with aiohttp.ClientSession() as session:
+            tasks = []
+            for word in words_to_scrape:
+                for base_url in URLS:
+                    # Skip words before the last scraped word for this URL
+                    last_word = progress.get(base_url, "")
+                    if last_word and word < last_word:
+                        continue
+                    tasks.append(scrape_ojibwe_page(session, base_url, word, semaphore))
+                attempted_words.add(word)
+                # Update progress for each URL
+                for url in URLS:
+                    if word > progress.get(url, ""):
+                        progress[url] = word
+                save_attempted_words(attempted_words, attempted_path)
+                save_progress(progress, progress_path)
 
-                    print(f"Debug: Requesting {url}")
-                    response = session.get(url, timeout=10)
-                    response.raise_for_status()
-                    print(f"Debug: Received response with status {response.status_code}")
-                    soup = BeautifulSoup(response.text, "html.parser")
-                    print(
-                        f"Debug: Parsed HTML, length of content: "
-                        f"{len(response.text)} characters"
-                    )
-
-                    ojibwe_text = None
-                    english_text = word
-
-                    if "ojibwe.lib" in base_url:
-                        entry = soup.select_one(".search-results .main-entry-search")
-                        print(f"Debug: Found {entry is not None} .main-entry-search entry")
-                        if entry:
-                            english_div = entry.select_one(".english-search-main-entry")
-                            if english_div:
-                                lemma_span = english_div.select_one(
-                                    ".main-entry-title .lemma"
-                                )
-                                ojibwe_text = lemma_span.text.strip() if lemma_span else "N/A"
-                                full_text = english_div.get_text(separator=" ").strip()
-                                english = full_text.replace(ojibwe_text, "").strip()
-                                english_texts = [
-                                    e.strip() for e in english.split(",")
-                                    if e.strip() and e.lower() != ojibwe_text.lower()
-                                ]
-                                print(
-                                    f"Debug: Found Ojibwe: {ojibwe_text is not None}, "
-                                    f"English: {bool(english_texts)}"
-                                )
-                                if ojibwe_text and english_texts:
-                                    translations.append({
-                                        "ojibwe_text": ojibwe_text,
-                                        "english_text": english_texts,
-                                        "definition": full_text,
-                                    })
-                                    update_or_create_ojibwe_to_english(
-                                        ojibwe_text, english_texts
-                                    )
-                                    for e_text in english_texts:
-                                        update_or_create_english_to_ojibwe(
-                                            e_text, ojibwe_text
-                                        )
-                            else:
-                                print("Debug: No .english-search-main-entry found")
-
-                    elif "glosbe.com" in base_url:
-                        entry = soup.select_one(".translation")
-                        print(f"Debug: Found {entry is not None} .translation entry")
-                        if entry:
-                            ojibwe = entry.find("span", class_="translation-term")
-                            english = entry.find("span", class_="translation-translation")
-                            print(
-                                f"Debug: Found Ojibwe: {ojibwe is not None}, "
-                                f"English: {english is not None}"
-                            )
-                            if ojibwe and english:
-                                ojibwe_text = ojibwe.text.strip()
-                                english_text = english.text.strip()
-                                definition = f"{ojibwe_text}: {english_text}"
-                                translations.append({
-                                    "ojibwe_text": ojibwe_text,
-                                    "english_text": [english_text],
-                                    "definition": definition,
-                                })
-                                update_or_create_ojibwe_to_english(
-                                    ojibwe_text, [english_text]
-                                )
-                                update_or_create_english_to_ojibwe(
-                                    english_text, ojibwe_text
-                                )
-
-                    if ojibwe_text:
-                        print(f"Found translation for '{word}': {ojibwe_text}")
-                    attempted_words.add(word)
-                    save_attempted_words(attempted_words, attempted_path)
-                    time.sleep(1)  # Delay to avoid rate limiting
-                except Exception as e:
-                    print(f"Error scraping {url} for word '{word}': {e}")
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for result in results:
+                if isinstance(result, list):
+                    translations.extend(result)
 
     print(f"Scraped and stored {len(translations)} new Ojibwe translations.")
+    return translations
+
+
+def scrape_ojibwe() -> None:
+    """Main function to run the scraper and semantic analysis in a loop.
+
+    Scrapes translations, then runs semantic analysis, prompting the user to
+    continue if desired.
+    """
+    loop = asyncio.get_event_loop()
+    translations = loop.run_until_complete(scrape_ojibwe_async())
 
     # Perform semantic analysis after scraping
     print("Performing semantic analysis on translations...")
     from translations.utils.analysis import print_semantic_matches
-    print_semantic_matches()
-
-    return translations
+    while True:
+        if not print_semantic_matches():
+            break
 
 
 if __name__ == "__main__":

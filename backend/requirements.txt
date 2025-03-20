@@ -14,3 +14,4 @@ transformers==4.45.1          # Latest stable version as of March 2025
 torch==2.3.1+cu121 --extra-index-url https://download.pytorch.org/whl/cu121 # For transformer models
 numpy<2.0                     # For numerical operations with transformers and consistency with Torch deps
 wordfreq==3.1.1               # Word frequency data for language detection
+aiohttp==3.9.5                # Asynchronous HTTP client for concurrent requests
