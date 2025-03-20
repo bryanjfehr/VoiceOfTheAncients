@@ -1,0 +1,42 @@
+"""Shared word frequency data for ranking English words by usage."""
+from typing import Dict
+
+# Frequency list (word: frequency) for ranking
+# Sourced from a subset of common English words (approximated frequencies)
+WORD_FREQUENCIES: Dict[str, int] = {
+    "the": 1000000,
+    "be": 800000,
+    "to": 750000,
+    "of": 700000,
+    "and": 650000,
+    "a": 600000,
+    "in": 550000,
+    "that": 500000,
+    "have": 450000,
+    "i": 400000,
+    "it": 350000,
+    "for": 300000,
+    "not": 250000,
+    "on": 200000,
+    "with": 190000,
+    "he": 180000,
+    "as": 170000,
+    "you": 160000,
+    "do": 150000,
+    "at": 140000,
+    "this": 130000,
+    "but": 120000,
+    "his": 110000,
+    "by": 100000,
+    "from": 90000,
+    "they": 85000,
+    "we": 80000,
+    "say": 75000,
+    "her": 70000,
+    "she": 65000,
+    "water": 50000,
+    "fire": 45000,
+    "hello": 40000,
+    "good": 35000,
+    "day": 30000,
+}

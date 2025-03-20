@@ -9,5 +9,8 @@ google-cloud-storage==2.15.0  # Google Cloud Storage client for file uploads
 pytest==8.1.1                 # Testing framework for unit tests
 pytest-django==4.8.0          # Django-specific testing utilities
 transformers==4.45.1          # Latest stable version as of March 2025
-torch==2.6.0                  # Required for transformers (PyTorch backend)
-numpy==2.1.2                  # For numerical operations with transformers
+# Use torch with CUDA 12.1 support for GPU acceleration
+# Install with: pip install torch==2.6.0+cu121 -f https://download.pytorch.org/whl/torch_stable.html
+torch==2.3.1+cu121 --extra-index-url https://download.pytorch.org/whl/cu121 # For transformer models
+numpy<2.0                     # For numerical operations with transformers and consistency with Torch deps
+wordfreq==3.1.1               # Word frequency data for language detection
