@@ -277,6 +277,7 @@ def print_semantic_matches(threshold: float = 0.84, batch_size: int = 500, min_f
         eng_defs: List[str] = []
         for eng_word in batch_words:
             eng_def = english_dict.get(eng_word, f"{eng_word} (definition unavailable)")
+            print(f"English word: {eng_word}, Definition: {eng_def}")
             eng_words.append(eng_word)
             eng_defs.append(eng_def)
 
@@ -291,6 +292,7 @@ def print_semantic_matches(threshold: float = 0.84, batch_size: int = 500, min_f
             for j, trans in enumerate(ojibwe_translations):
                 ojibwe_embed = ojibwe_embeds[j]
                 ojibwe_def = ojibwe_defs[j]
+                print(f"Ojibwe word: {trans['ojibwe_text']}, Definition: {ojibwe_def}")
                 similarity = float(
                     np.dot(eng_embed, ojibwe_embed) /
                     (np.linalg.norm(eng_embed) * np.linalg.norm(ojibwe_embed))
@@ -305,9 +307,6 @@ def print_semantic_matches(threshold: float = 0.84, batch_size: int = 500, min_f
                     }
                     batch_matches.append(match)
                     print(f"Match found: {eng_word} -> {trans['ojibwe_text']} (Similarity: {similarity:.2f})")
-                    # Persist to MongoDB
-                    update_or_create_english_to_ojibwe(eng_word, trans["ojibwe_text"])
-                    update_or_create_ojibwe_to_english(trans["ojibwe_text"], [eng_word])
                 else:
                     print(f"No match: {eng_word} -> {trans['ojibwe_text']} (Similarity: {similarity:.2f}, below threshold {threshold})")
 

@@ -1,18 +1,18 @@
 [
   {
-    "english_text": "albuminiferous",
-    "english_definition": "Supplying albumen.",
-    "ojibwe_text": "pane",
-    "ojibwe_definition": "pane",
-    "similarity": 0.86674964427948,
+    "english_text": "alcahest",
+    "english_definition": "Same as Alkahest.",
+    "ojibwe_text": "achigaazh",
+    "ojibwe_definition": "achigaazh",
+    "similarity": 0.8816725015640259,
     "index": 0
   },
   {
-    "english_text": "altisonous",
-    "english_definition": "Altisonant.",
-    "ojibwe_text": "idan",
-    "ojibwe_definition": "idan",
-    "similarity": 0.8598158955574036,
+    "english_text": "adjutage",
+    "english_definition": "Same as Ajutage.",
+    "ojibwe_text": "achige",
+    "ojibwe_definition": "achige",
+    "similarity": 0.8691222667694092,
     "index": 1
   },
   {
@@ -34,10 +34,18 @@
   {
     "english_text": "altisonous",
     "english_definition": "Altisonant.",
+    "ojibwe_text": "adaawange",
+    "ojibwe_definition": "adaawange",
+    "similarity": 0.8541920185089111,
+    "index": 4
+  },
+  {
+    "english_text": "altisonous",
+    "english_definition": "Altisonant.",
     "ojibwe_text": "aabise",
     "ojibwe_definition": "aabise",
     "similarity": 0.8541649580001831,
-    "index": 4
+    "index": 5
   },
   {
     "english_text": "altisonous",
@@ -45,7 +53,31 @@
     "ojibwe_text": "gabenaage",
     "ojibwe_definition": "gabenaage",
     "similarity": 0.8537800908088684,
-    "index": 5
+    "index": 6
+  },
+  {
+    "english_text": "adjutage",
+    "english_definition": "Same as Ajutage.",
+    "ojibwe_text": "adaawange",
+    "ojibwe_definition": "adaawange",
+    "similarity": 0.8531554341316223,
+    "index": 7
+  },
+  {
+    "english_text": "adjutage",
+    "english_definition": "Same as Ajutage.",
+    "ojibwe_text": "achigaazo",
+    "ojibwe_definition": "achigaazo",
+    "similarity": 0.8516745567321777,
+    "index": 8
+  },
+  {
+    "english_text": "alabastrian",
+    "english_definition": "Alabastrine.",
+    "ojibwe_text": "achige",
+    "ojibwe_definition": "achige",
+    "similarity": 0.8515627384185791,
+    "index": 9
   },
   {
     "english_text": "altisonous",
@@ -53,7 +85,7 @@
     "ojibwe_text": "endaad",
     "ojibwe_definition": "endaad",
     "similarity": 0.851269543170929,
-    "index": 6
+    "index": 10
   },
   {
     "english_text": "altisonous",
@@ -61,15 +93,31 @@
     "ojibwe_text": "jekisin",
     "ojibwe_definition": "jekisin",
     "similarity": 0.8503376245498657,
-    "index": 7
+    "index": 11
   },
   {
     "english_text": "altisonous",
     "english_definition": "Altisonant.",
-    "ojibwe_text": "pane",
-    "ojibwe_definition": "pane",
-    "similarity": 0.847840428352356,
-    "index": 8
+    "ojibwe_text": "achige",
+    "ojibwe_definition": "achige",
+    "similarity": 0.8496614694595337,
+    "index": 12
+  },
+  {
+    "english_text": "alcahest",
+    "english_definition": "Same as Alkahest.",
+    "ojibwe_text": "endaad",
+    "ojibwe_definition": "endaad",
+    "similarity": 0.8487390875816345,
+    "index": 13
+  },
+  {
+    "english_text": "alular",
+    "english_definition": "Pertaining to the alula.",
+    "ojibwe_text": "achige",
+    "ojibwe_definition": "achige",
+    "similarity": 0.8484296798706055,
+    "index": 14
   },
   {
     "english_text": "adjutage",
@@ -77,47 +125,63 @@
     "ojibwe_text": "endazhi-",
     "ojibwe_definition": "endazhi-",
     "similarity": 0.8473129272460938,
-    "index": 9
+    "index": 15
   },
   {
-    "english_text": "altisonous",
-    "english_definition": "Altisonant.",
-    "ojibwe_text": "idizo",
-    "ojibwe_definition": "idizo",
-    "similarity": 0.8457648754119873,
-    "index": 10
+    "english_text": "alcahest",
+    "english_definition": "Same as Alkahest.",
+    "ojibwe_text": "gabaashim",
+    "ojibwe_definition": "gabaashim",
+    "similarity": 0.8463956117630005,
+    "index": 16
   },
   {
-    "english_text": "alabastrian",
-    "english_definition": "Alabastrine.",
-    "ojibwe_text": "pane",
-    "ojibwe_definition": "pane",
-    "similarity": 0.8448715806007385,
-    "index": 11
+    "english_text": "alcahest",
+    "english_definition": "Same as Alkahest.",
+    "ojibwe_text": "zhaaboganaam",
+    "ojibwe_definition": "zhaaboganaam",
+    "similarity": 0.8457841873168945,
+    "index": 17
   },
   {
-    "english_text": "adjutage",
-    "english_definition": "Same as Ajutage.",
-    "ojibwe_text": "gabikaage",
-    "ojibwe_definition": "gabikaage",
-    "similarity": 0.8443107604980469,
-    "index": 12
+    "english_text": "alfileria",
+    "english_definition": "Same as Alfilaria.",
+    "ojibwe_text": "endaso-",
+    "ojibwe_definition": "endaso-",
+    "similarity": 0.8449980616569519,
+    "index": 18
   },
   {
     "english_text": "alfilerilla",
     "english_definition": "Same as Alfilaria.",
     "ojibwe_text": "endaso-",
     "ojibwe_definition": "endaso-",
-    "similarity": 0.8442751169204712,
-    "index": 13
+    "similarity": 0.8449980616569519,
+    "index": 19
   },
   {
-    "english_text": "adjutage",
-    "english_definition": "Same as Ajutage.",
-    "ojibwe_text": "achige",
-    "ojibwe_definition": "achige",
-    "similarity": 0.843835175037384,
-    "index": 14
+    "english_text": "alcahest",
+    "english_definition": "Same as Alkahest.",
+    "ojibwe_text": "abaate",
+    "ojibwe_definition": "abaate",
+    "similarity": 0.8447805047035217,
+    "index": 20
+  },
+  {
+    "english_text": "alcahest",
+    "english_definition": "Same as Alkahest.",
+    "ojibwe_text": "odaabaazh",
+    "ojibwe_definition": "odaabaazh",
+    "similarity": 0.8443847298622131,
+    "index": 21
+  },
+  {
+    "english_text": "altheine",
+    "english_definition": "Asparagine.",
+    "ojibwe_text": "abaagamide",
+    "ojibwe_definition": "abaagamide",
+    "similarity": 0.8437292575836182,
+    "index": 22
   },
   {
     "english_text": "altisonous",
@@ -125,7 +189,39 @@
     "ojibwe_text": "endaso-",
     "ojibwe_definition": "endaso-",
     "similarity": 0.8430532217025757,
-    "index": 15
+    "index": 23
+  },
+  {
+    "english_text": "alcahest",
+    "english_definition": "Same as Alkahest.",
+    "ojibwe_text": "jekaagoneshim",
+    "ojibwe_definition": "jekaagoneshim",
+    "similarity": 0.842259407043457,
+    "index": 24
+  },
+  {
+    "english_text": "alfileria",
+    "english_definition": "Same as Alfilaria.",
+    "ojibwe_text": "achige",
+    "ojibwe_definition": "achige",
+    "similarity": 0.8416880369186401,
+    "index": 25
+  },
+  {
+    "english_text": "alfilerilla",
+    "english_definition": "Same as Alfilaria.",
+    "ojibwe_text": "achige",
+    "ojibwe_definition": "achige",
+    "similarity": 0.8416880369186401,
+    "index": 26
+  },
+  {
+    "english_text": "alcahest",
+    "english_definition": "Same as Alkahest.",
+    "ojibwe_text": "abanzh",
+    "ojibwe_definition": "abanzh",
+    "similarity": 0.8413507342338562,
+    "index": 27
   },
   {
     "english_text": "ambagitory",
@@ -133,6 +229,14 @@
     "ojibwe_text": "aabise",
     "ojibwe_definition": "aabise",
     "similarity": 0.8411914110183716,
-    "index": 16
+    "index": 28
+  },
+  {
+    "english_text": "abjugate",
+    "english_definition": "To unyoke. [Obs.] Bailey.",
+    "ojibwe_text": "eni-",
+    "ojibwe_definition": "eni-",
+    "similarity": 0.8403262495994568,
+    "index": 29
   }
 ]
