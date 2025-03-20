@@ -256,9 +256,19 @@ async def scrape_ojibwe_page(
             english_def_span = item.find("span", class_="py-1")
             if ojibwe_span:
                 ojibwe_text = ojibwe_span.text.strip()
-                # Use the input word as the English text, and definition if available
-                definition = english_def_span.text.strip() if english_def_span else f"{ojibwe_text}: {english_text}"
-                print(f"Debug: Found Ojibwe: {ojibwe_text}, English: {english_text}")
+                # Try to find a more detailed definition if py-1 is empty
+                definition = None
+                if english_def_span:
+                    definition = english_def_span.text.strip()
+                else:
+                    # Look for alternative definition elements (e.g., examples or additional info)
+                    example_span = item.find("span", class_="text-gray-500")
+                    if example_span:
+                        definition = example_span.text.strip()
+                    else:
+                        # Fallback to a simple definition
+                        definition = f"{word}: {ojibwe_text}"
+                print(f"Debug: Found Ojibwe: {ojibwe_text}, English: {english_text}, Definition: {definition}")
                 translations.append({
                     "ojibwe_text": ojibwe_text,
                     "english_text": [english_text],
@@ -270,6 +280,7 @@ async def scrape_ojibwe_page(
     if ojibwe_text:
         print(f"Found translation for '{word}': {ojibwe_text}")
     return translations
+
 
 async def scrape_full_dictionary(base_url: str) -> List[Dict[str, Union[str, List[str]]]]:
     """Scrape the entire dictionary from a single website asynchronously.
@@ -461,6 +472,14 @@ async def scrape_ojibwe_async() -> List[Dict[str, Union[str, List[str]]]]:
     return translations
 
 
+def reset_processed_words() -> None:
+    """Reset the processed_words.json file to an empty list."""
+    processed_path = os.path.join(BASE_DIR, "data", "processed_words.json")
+    with open(processed_path, "w", encoding="utf-8") as f:
+        json.dump([], f)
+    print(f"Reset processed_words.json at {processed_path}")
+
+
 def scrape_ojibwe() -> None:
     """Main function to run the scraper and semantic analysis in a loop.
 
@@ -470,11 +489,16 @@ def scrape_ojibwe() -> None:
     loop = asyncio.get_event_loop()
     translations = loop.run_until_complete(scrape_ojibwe_async())
 
+    # Reset processed_words.json if new translations were added
+    if translations:
+        print(f"New translations added. Resetting processed_words.json to allow reprocessing.")
+        reset_processed_words()
+
     # Perform semantic analysis after scraping
     print("Performing semantic analysis on translations...")
     from translations.utils.analysis import print_semantic_matches
     while True:
-        if not print_semantic_matches():
+        if not print_semantic_matches(threshold=0.84):  # Set threshold to 0.84
             break
 
 

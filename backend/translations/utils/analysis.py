@@ -2,13 +2,16 @@
 
 This module performs semantic matching between English and Ojibwe definitions
 using a Transformer model (DistilBERT) to fill translation gaps. It ranks words
-by frequency, persists matches in MongoDB, and prompts the user to continue
-processing batches of words.
+by frequency, persists matches in MongoDB, and processes words in batches.
 """
 import json
 import os
+import time
 from typing import Dict, List, Union, Set
 import warnings
+import keyboard
+import threading
+import sys
 
 import torch
 import numpy as np
@@ -48,7 +51,9 @@ def load_english_definitions(json_path: str) -> Union[Dict[str, str], List[str]]
     """
     try:
         with open(json_path, "r", encoding="utf-8") as file:
-            return json.load(file)
+            data = json.load(file)
+        print(f"Loaded {len(data)} entries from {json_path}")
+        return data
     except Exception as e:
         print(f"Error loading English definitions: {e}")
         return {}
@@ -65,8 +70,11 @@ def load_processed_words(processed_path: str) -> Set[str]:
     """
     try:
         with open(processed_path, "r", encoding="utf-8") as file:
-            return set(json.load(file))
+            processed = set(json.load(file))
+        print(f"Loaded {len(processed)} processed words from {processed_path}")
+        return processed
     except FileNotFoundError:
+        print(f"No processed words file found at {processed_path}. Starting fresh.")
         return set()
 
 
@@ -78,7 +86,8 @@ def save_processed_words(processed_words: Set[str], processed_path: str) -> None
         processed_path (str): Path to the JSON file to store processed words.
     """
     with open(processed_path, "w", encoding="utf-8") as file:
-        json.dump(list(processed_words), file)
+        json.dump(list(processed_words), file, indent=2)
+    print(f"Saved {len(processed_words)} processed words to {processed_path}")
 
 
 def batch_get_embeddings(
@@ -117,19 +126,56 @@ def batch_get_embeddings(
     return np.vstack(embeddings)
 
 
-def print_semantic_matches(threshold: float = 0.8) -> bool:
-    """Analyze translations and print semantic matches to fill gaps.
+def countdown_prompt(total_processed: int, delay: int = 10) -> bool:
+    """Display a countdown prompt and return whether to continue.
+
+    Args:
+        total_processed (int): Total number of words processed so far.
+        delay (int): Number of seconds to wait before continuing. Defaults to 10.
+
+    Returns:
+        bool: True if the user wants to continue, False if interrupted.
+    """
+    print(f"{total_processed} words processed successfully. Processing another batch in {delay} seconds. Press any key to cancel...")
+    
+    # Use a flag to track if a key is pressed
+    stop_event = threading.Event()
+    
+    def check_keypress():
+        keyboard.read_event()
+        stop_event.set()
+
+    # Start a thread to listen for keypress
+    keypress_thread = threading.Thread(target=check_keypress)
+    keypress_thread.daemon = True
+    keypress_thread.start()
+
+    # Countdown
+    for i in range(delay, 0, -1):
+        if stop_event.is_set():
+            print("Cancelled by user. Exiting script.")
+            sys.exit(0)  # Exit the script immediately
+        time.sleep(1)
+        print(f"{i} seconds remaining...", end="\r")
+    
+    print("\nContinuing with next batch...")
+    return True
+
+
+def print_semantic_matches(threshold: float = 0.84, batch_size: int = 500, min_frequency: int = 100) -> bool:
+    """Analyze translations and print semantic matches to fill gaps in batches.
 
     This function loads English and Ojibwe definitions, computes their embeddings
     using a Transformer model, and finds semantic matches based on cosine similarity.
-    Matches are persisted to MongoDB, and the user is prompted to continue with the
-    next batch.
+    Matches are persisted to MongoDB and saved to a JSON file.
 
     Args:
-        threshold (float): Minimum similarity score for a match. Defaults to 0.8.
+        threshold (float): Minimum similarity score for a match. Defaults to 0.84.
+        batch_size (int): Number of words to process in each batch. Defaults to 500.
+        min_frequency (int): Minimum frequency for English words to be considered. Defaults to 100.
 
     Returns:
-        bool: True if the user wants to continue with the next batch, False otherwise.
+        bool: True if the analysis completed, False if interrupted.
     """
     # Initialize the Transformer model and tokenizer
     model_name = "distilbert-base-uncased"
@@ -154,10 +200,10 @@ def print_semantic_matches(threshold: float = 0.8) -> bool:
         pass
     elif isinstance(english_dict, list):
         if all(isinstance(item, str) for item in english_dict):
-            english_dict = {word: word for word in english_dict}
+            english_dict = {word: f"{word} (definition unavailable)" for word in english_dict}
         elif all(isinstance(item, dict) and "word" in item for item in english_dict):
             english_dict = {
-                item["word"]: item.get("definition", item["word"])
+                item["word"]: item.get("definition", f"{item['word']} (definition unavailable)")
                 for item in english_dict
             }
         else:
@@ -172,13 +218,14 @@ def print_semantic_matches(threshold: float = 0.8) -> bool:
     if not ojibwe_translations:
         print("No Ojibwe translations found in database.")
         return False
+    print(f"Loaded {len(ojibwe_translations)} Ojibwe translations from MongoDB")
 
     # Identify untranslated English words
     translated_english = {
-        t["english_text"][0] for t in ojibwe_translations if t.get("english_text")
+        t["english_text"][0].lower() for t in ojibwe_translations if t.get("english_text")
     }
     untranslated_words = [
-        word for word in english_dict.keys() if word not in translated_english
+        word for word in english_dict.keys() if word.lower() not in translated_english
     ]
 
     print(f"Found {len(untranslated_words)} untranslated English words.")
@@ -187,105 +234,129 @@ def print_semantic_matches(threshold: float = 0.8) -> bool:
     processed_path = os.path.join(BASE_DIR, "data", "processed_words.json")
     processed_words = load_processed_words(processed_path)
 
-    # Sort untranslated words by frequency
+    # Sort untranslated words by frequency and filter by minimum frequency
     word_freqs = [
         (word, WORD_FREQUENCIES.get(word.lower(), 0))
         for word in untranslated_words
         if word not in processed_words
     ]
+    word_freqs = [(word, freq) for word, freq in word_freqs if freq >= min_frequency]
     word_freqs.sort(key=lambda x: x[1], reverse=True)  # Highest frequency first
     remaining_words = [word for word, _ in word_freqs]
 
     if not remaining_words:
-        print("No more untranslated words to process.")
+        print("No more untranslated words to process (after frequency filter).")
         return False
 
-    # Process all remaining words
-    batch_words = remaining_words
-    print(f"Processing {len(batch_words)} words for analysis.")
+    print(f"Total words to process (after frequency filter): {len(remaining_words)}")
 
-    # Precompute embeddings for Ojibwe definitions
+    # Precompute embeddings for Ojibwe definitions (do this once for all batches)
     ojibwe_defs = [
         trans.get("definition", trans["ojibwe_text"])
         for trans in ojibwe_translations
     ]
-    ojibwe_defs = [d for d in ojibwe_defs if d]
+    ojibwe_defs = [d if d else f"{trans['ojibwe_text']} (definition unavailable)" for d, trans in zip(ojibwe_defs, ojibwe_translations)]
+    print(f"Found {len(ojibwe_defs)} Ojibwe definitions")
+    if not ojibwe_defs:
+        print("No Ojibwe definitions available for semantic analysis.")
+        return False
     ojibwe_embeds = batch_get_embeddings(ojibwe_defs, tokenizer, model)
     print(f"Computed embeddings for {len(ojibwe_defs)} Ojibwe definitions.")
 
-    # Process English definitions in batches
-    matches: List[Dict[str, Union[str, float]]] = []
-    eng_words: List[str] = []
-    eng_defs: List[str] = []
-    for eng_word in batch_words:
-        eng_def = english_dict.get(eng_word, eng_word)
-        eng_words.append(eng_word)
-        eng_defs.append(eng_def)
+    # Process words in batches
+    total_processed = 0
+    all_matches: List[Dict[str, Union[str, float]]] = []
+    batch_number = 1
 
-    eng_embeds = batch_get_embeddings(eng_defs, tokenizer, model)
-    print(f"Computed embeddings for {len(eng_defs)} English definitions.")
+    for batch_start in range(0, len(remaining_words), batch_size):
+        batch_words = remaining_words[batch_start:batch_start + batch_size]
+        print(f"\nProcessing batch {batch_number} with {len(batch_words)} words (Total processed: {total_processed})")
 
-    # Compute similarities and store matches
-    for i, eng_word in enumerate(eng_words):
-        eng_embed = eng_embeds[i]
-        for j, trans in enumerate(ojibwe_translations):
-            if not ojibwe_defs[j]:
-                continue
-            ojibwe_embed = ojibwe_embeds[j]
-            similarity = float(
-                np.dot(eng_embed, ojibwe_embed) /
-                (np.linalg.norm(eng_embed) * np.linalg.norm(ojibwe_embed))
-            )
-            if similarity >= threshold:
-                match = {
-                    "english_text": eng_word,
-                    "ojibwe_text": trans["ojibwe_text"],
-                    "similarity": similarity,
-                }
-                matches.append(match)
-                # Persist to MongoDB
-                update_or_create_english_to_ojibwe(eng_word, trans["ojibwe_text"])
-                update_or_create_ojibwe_to_english(trans["ojibwe_text"], [eng_word])
+        # Process English definitions for this batch
+        eng_words: List[str] = []
+        eng_defs: List[str] = []
+        for eng_word in batch_words:
+            eng_def = english_dict.get(eng_word, f"{eng_word} (definition unavailable)")
+            eng_words.append(eng_word)
+            eng_defs.append(eng_def)
 
-    # Update processed words
-    processed_words.update(batch_words)
-    save_processed_words(processed_words, processed_path)
+        eng_embeds = batch_get_embeddings(eng_defs, tokenizer, model)
+        print(f"Computed embeddings for {len(eng_defs)} English definitions in batch {batch_number}.")
 
-    # Sort matches by similarity (ascending order, highest scores at the bottom)
-    matches.sort(key=lambda x: x["similarity"])  # Ascending order
-    
+        # Compute similarities and store matches
+        batch_matches: List[Dict[str, Union[str, float]]] = []
+        for i, eng_word in enumerate(eng_words):
+            eng_embed = eng_embeds[i]
+            eng_def = eng_defs[i]
+            for j, trans in enumerate(ojibwe_translations):
+                ojibwe_embed = ojibwe_embeds[j]
+                ojibwe_def = ojibwe_defs[j]
+                similarity = float(
+                    np.dot(eng_embed, ojibwe_embed) /
+                    (np.linalg.norm(eng_embed) * np.linalg.norm(ojibwe_embed))
+                )
+                if similarity >= threshold:
+                    match = {
+                        "english_text": eng_word,
+                        "english_definition": eng_def,
+                        "ojibwe_text": trans["ojibwe_text"],
+                        "ojibwe_definition": ojibwe_def,
+                        "similarity": similarity,
+                    }
+                    batch_matches.append(match)
+                    print(f"Match found: {eng_word} -> {trans['ojibwe_text']} (Similarity: {similarity:.2f})")
+                    # Persist to MongoDB
+                    update_or_create_english_to_ojibwe(eng_word, trans["ojibwe_text"])
+                    update_or_create_ojibwe_to_english(trans["ojibwe_text"], [eng_word])
+                else:
+                    print(f"No match: {eng_word} -> {trans['ojibwe_text']} (Similarity: {similarity:.2f}, below threshold {threshold})")
+
+        # Add batch matches to all matches
+        all_matches.extend(batch_matches)
+        print(f"Batch {batch_number} generated {len(batch_matches)} matches. Total matches so far: {len(all_matches)}")
+
+        # Update processed words
+        processed_words.update(batch_words)
+        save_processed_words(processed_words, processed_path)
+
+        total_processed += len(batch_words)
+        batch_number += 1
+
+        # Check if there are more words to process
+        if batch_start + batch_size >= len(remaining_words):
+            break
+
+        # Prompt to continue with countdown
+        if not countdown_prompt(total_processed):
+            break
+
+    # Sort matches by similarity (descending) and assign indices
+    all_matches.sort(key=lambda x: x["similarity"], reverse=True)
+    indexed_matches = [
+        {**match, "index": idx}
+        for idx, match in enumerate(all_matches)
+    ]
+
+    # Log the number of matches found
+    print(f"\nGenerated {len(indexed_matches)} semantic matches with threshold {threshold}")
+
     # Save matches to a JSON file
     matches_path = os.path.join(BASE_DIR, "data", "semantic_matches.json")
     with open(matches_path, "w", encoding="utf-8") as f:
-        json.dump(matches, f, indent=2)
-    print(f"Saved {len(matches)} matches to {matches_path}")
+        json.dump(indexed_matches, f, indent=2)
+    print(f"Saved {len(indexed_matches)} matches to {matches_path}")
 
     # Print results
-    if matches:
-        print(f"Found {len(matches)} potential semantic matches:")
-        for match in matches:
+    if indexed_matches:
+        print(f"Found {len(indexed_matches)} potential semantic matches:")
+        for match in indexed_matches:
             print(
-                f"  {match['english_text']} -> {match['ojibwe_text']} "
+                f"  Index: {match['index']}, "
+                f"{match['english_text']} -> {match['ojibwe_text']} "
                 f"(Similarity: {match['similarity']:.2f})"
             )
         # Print a summary of similarity scores
-        similarities = [match["similarity"] for match in matches]
-        print("\nSimilarity Score Summary:")
-        print(f"  Minimum Similarity: {min(similarities):.2f}")
-        print(f"  Maximum Similarity: {max(similarities):.2f}")
-        print(f"  Average Similarity: {np.mean(similarities):.2f}")
-    else:
-        print("No semantic matches found above threshold.")
-    # Print results
-    if matches:
-        print(f"Found {len(matches)} potential semantic matches:")
-        for match in matches:
-            print(
-                f"  {match['english_text']} -> {match['ojibwe_text']} "
-                f"(Similarity: {match['similarity']:.2f})"
-            )
-        # Print a summary of similarity scores
-        similarities = [match["similarity"] for match in matches]
+        similarities = [match["similarity"] for match in indexed_matches]
         print("\nSimilarity Score Summary:")
         print(f"  Minimum Similarity: {min(similarities):.2f}")
         print(f"  Maximum Similarity: {max(similarities):.2f}")
@@ -293,9 +364,7 @@ def print_semantic_matches(threshold: float = 0.8) -> bool:
     else:
         print("No semantic matches found above threshold.")
 
-    # Prompt to continue
-    response = input("\nRun semantic analysis again? (Y/n): ").strip().lower()
-    return response in ("", "y", "yes")
+    return True
 
 
 if __name__ == "__main__":

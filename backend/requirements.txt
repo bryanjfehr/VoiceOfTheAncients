@@ -17,3 +17,4 @@ numpy<2.0                     # For numerical operations with transformers and c
 wordfreq==3.1.1               # Word frequency data for language detection
 aiohttp==3.9.5                # Asynchronous HTTP client for concurrent requests
 djangorestframework==3.15.2   # REST API framework for Django
+keyboard-0.13.5               # Keyboard input for testing
