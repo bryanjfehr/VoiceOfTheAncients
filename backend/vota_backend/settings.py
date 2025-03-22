@@ -9,8 +9,8 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Security settings
 SECRET_KEY = config("DJANGO_SECRET_KEY")
-DEBUG = True
-ALLOWED_HOSTS = ["localhost", "127.0.0.1"]
+DEBUG = False
+ALLOWED_HOSTS = ["voiceoftheancients.ca", "www.voiceoftheancients.ca"]
 
 # Application definition
 INSTALLED_APPS = [
@@ -103,23 +103,9 @@ STATICFILES_DIRS = [BASE_DIR / "static"]
 # Security settings
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-CORS_ALLOW_ALL_ORIGINS = True  # For development only; restrict in production
-CORS_ALLOW_METHODS = [
-    'GET',
-    'POST',
-    'PUT',
-    'PATCH',
-    'DELETE',
-    'OPTIONS',
-]
-CORS_ALLOW_HEADERS = [
-    'accept',
-    'accept-encoding',
-    'authorization',
-    'content-type',
-    'dnt',
-    'origin',
-    'user-agent',
-    'x-csrftoken',
-    'x-requested-with',
+ALLOWED_HOSTS = ["voiceoftheancients.ca"]
+CORS_ALLOW_ALL_ORIGINS = False
+CORS_ALLOWED_ORIGINS = [
+    "http://voiceoftheancients.ca",
+    "https://voiceoftheancients.ca",
 ]

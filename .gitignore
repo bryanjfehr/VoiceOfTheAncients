@@ -7,3 +7,11 @@ backend/scrapers/__pycache__/*
 backend/translations/__pycache__/*
 backend/translations/utils/__pycache__/*
 backend/vota_backend/__pycache__/*
+backend/models.log
+backend/scraper.log
+backend/analysis.log
+backend/db.sqlite3
+backend/scraper.log
+backend/firebase_credentials.json
+backend/gcloud_credentials.json
+backend/data/processed_words.json
