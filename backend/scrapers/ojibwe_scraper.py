@@ -2,9 +2,9 @@
 """
 Scrape Ojibwe translations to build English-Ojibwe dictionaries.
 
-This module scrapes translations from online sources, stores them in SQLite,
-and syncs them to Firestore with versioning. It prioritizes untranslated words
-by frequency of usage using asynchronous requests for efficiency.
+This module scrapes translations from online sources, stores raw data in a JSON file,
+processes the raw data into validated entries, stores them in SQLite, and syncs to Firestore.
+It prioritizes untranslated words by frequency of usage using asynchronous requests for efficiency.
 """
 import asyncio
 import json
@@ -45,7 +45,7 @@ from translations.models import (  # noqa: E402
 )
 from translations.utils.frequencies import WORD_FREQUENCIES  # noqa: E402
 from translations.utils.get_dict_size import get_english_dict_size  # noqa: E402
-from translations.utils.definition_utils import validate_translation_entry  # noqa: E402
+from translations.utils.process_raw_data import load_raw_data, save_raw_data, process_raw_data  # noqa: E402
 
 # Base URLs for scraping
 URLS = [
@@ -96,6 +96,9 @@ HEADERS = {
 
 # Version for this scrape
 CURRENT_VERSION = "1.0"
+
+# Path to raw data file
+RAW_DATA_PATH = os.path.join(BASE_DIR, "data", "raw_ojibwe_english_dict.json")
 
 
 async def get_existing_translations_count() -> int:
@@ -293,9 +296,7 @@ async def scrape_ojibwe_page(
     """
     Scrape a single Ojibwe translation page for a given word.
 
-    Improved definition extraction to ensure meaningful definitions are captured
-    from both the Ojibwe People's Dictionary and Glosbe. Uses validate_translation_entry
-    to ensure only valid entries are stored.
+    Stores raw scraped data without validation for later processing.
 
     Args:
         session (aiohttp.ClientSession): The aiohttp session for making requests.
@@ -304,7 +305,7 @@ async def scrape_ojibwe_page(
         semaphore (asyncio.Semaphore): Semaphore to limit concurrent requests.
 
     Returns:
-        List[Dict[str, Union[str, List[str]]]]: List of validated translation dictionaries.
+        List[Dict[str, Union[str, List[str]]]]: List of raw translation dictionaries.
     """
     translations: List[Dict[str, Union[str, List[str]]]] = []
     if "ojibwe.lib" in base_url:
@@ -337,14 +338,12 @@ async def scrape_ojibwe_page(
                     logger.warning(f"No Ojibwe text found for word '{word}' on {base_url}")
                     return translations
 
-                # Improved definition extraction
+                # Extract definition
                 definition = None
-                # Try to find a detailed definition in the entry
                 definition_div = entry.select_one(".definition")
                 if definition_div:
                     definition = definition_div.get_text(separator=" ").strip()
                 else:
-                    # Fallback to the full text of the entry, excluding the lemma
                     full_text = english_div.get_text(separator=" ").strip()
                     definition = full_text.replace(ojibwe_text, "").strip()
 
@@ -357,36 +356,19 @@ async def scrape_ojibwe_page(
                 if not english_texts:
                     english_texts = [word]  # Fallback to the input word if no translations found
 
-                # Create translation entry and validate
+                # Log the raw definition for debugging
+                logger.debug(
+                    f"Raw data for '{word}' on {base_url} - "
+                    f"Ojibwe: {ojibwe_text}, English: {english_texts}, Definition: {definition}"
+                )
+
+                # Create raw translation entry
                 translation_entry = {
                     "ojibwe_text": ojibwe_text,
                     "english_text": english_texts,
                     "definition": definition,
                 }
-                validated_entry = validate_translation_entry(translation_entry)
-                if not validated_entry:
-                    logger.warning(f"Invalid translation entry for '{word}' on {base_url}: {translation_entry}")
-                    return translations
-
-                translations.append(validated_entry)
-                # Store in SQLite
-                await sync_to_async(create_ojibwe_to_english_local)(
-                    validated_entry["ojibwe_text"],
-                    validated_entry["english_text"],
-                    version=CURRENT_VERSION
-                )
-                for e_text in validated_entry["english_text"]:
-                    await sync_to_async(create_english_to_ojibwe_local)(
-                        e_text,
-                        validated_entry["ojibwe_text"],
-                        validated_entry["definition"],
-                        version=CURRENT_VERSION
-                    )
-                logger.debug(
-                    f"Stored translation - Ojibwe: {validated_entry['ojibwe_text']}, "
-                    f"English: {validated_entry['english_text']}, "
-                    f"Definition: {validated_entry['definition']}"
-                )
+                translations.append(translation_entry)
 
     elif "glosbe.com" in base_url:
         translation_items = soup.select("div.translation__item")
@@ -399,51 +381,34 @@ async def scrape_ojibwe_page(
                     logger.warning(f"No Ojibwe text found in translation item for '{word}' on {base_url}")
                     continue
 
-                # Improved definition extraction
+                # Extract definition
                 definition = None
-                # Try primary definition
                 english_def_span = item.find("span", class_="py-1")
                 if english_def_span:
                     definition = english_def_span.text.strip()
-                # Fallback to example sentence
                 if not definition:
                     example_span = item.find("span", class_="text-gray-500")
                     if example_span:
                         definition = example_span.text.strip()
-                # Fallback to parent container text
                 if not definition:
                     parent_text = item.get_text(separator=" ").strip()
                     definition = parent_text.replace(ojibwe_text, "").strip()
+                if not definition:
+                    definition = f"{word}: {ojibwe_text}"
 
-                # Create translation entry and validate
+                # Log the raw definition for debugging
+                logger.debug(
+                    f"Raw data for '{word}' on {base_url} - "
+                    f"Ojibwe: {ojibwe_text}, English: {english_text}, Definition: {definition}"
+                )
+
+                # Create raw translation entry
                 translation_entry = {
                     "ojibwe_text": ojibwe_text,
                     "english_text": [english_text],
-                    "definition": definition if definition else f"{word}: {ojibwe_text}",
+                    "definition": definition,
                 }
-                validated_entry = validate_translation_entry(translation_entry)
-                if not validated_entry:
-                    logger.warning(f"Invalid translation entry for '{word}' on {base_url}: {translation_entry}")
-                    continue
-
-                translations.append(validated_entry)
-                # Store in SQLite
-                await sync_to_async(create_ojibwe_to_english_local)(
-                    validated_entry["ojibwe_text"],
-                    validated_entry["english_text"],
-                    version=CURRENT_VERSION
-                )
-                await sync_to_async(create_english_to_ojibwe_local)(
-                    validated_entry["english_text"][0],
-                    validated_entry["ojibwe_text"],
-                    validated_entry["definition"],
-                    version=CURRENT_VERSION
-                )
-                logger.debug(
-                    f"Stored translation - Ojibwe: {validated_entry['ojibwe_text']}, "
-                    f"English: {validated_entry['english_text']}, "
-                    f"Definition: {validated_entry['definition']}"
-                )
+                translations.append(translation_entry)
 
     if ojibwe_text:
         logger.info(f"Found translation for '{word}': {ojibwe_text}")
@@ -458,11 +423,13 @@ async def scrape_full_dictionary(
     """
     Scrape the entire dictionary from a single website asynchronously.
 
+    Stores raw scraped data without validation for later processing.
+
     Args:
         base_url (str): Base URL of the site to scrape (e.g., ojibwe.lib.umn.edu).
 
     Returns:
-        List[Dict[str, Union[str, List[str]]]]: List of validated translation dictionaries.
+        List[Dict[str, Union[str, List[str]]]]: List of raw translation dictionaries.
     """
     translations: List[Dict[str, Union[str, List[str]]]] = []
     semaphore = asyncio.Semaphore(10)  # Limit to 10 concurrent requests
@@ -489,7 +456,7 @@ async def scrape_full_dictionary(
                             logger.warning(f"No Ojibwe text found in entry on {base_url}")
                             continue
 
-                        # Improved definition extraction
+                        # Extract definition
                         definition = None
                         definition_div = entry.select_one(".definition")
                         if definition_div:
@@ -508,36 +475,19 @@ async def scrape_full_dictionary(
                             logger.warning(f"No English translations extracted from definition: {definition}")
                             continue
 
-                        # Create translation entry and validate
+                        # Log the raw definition for debugging
+                        logger.debug(
+                            f"Raw data on {base_url} - "
+                            f"Ojibwe: {ojibwe_text}, English: {english_texts}, Definition: {definition}"
+                        )
+
+                        # Create raw translation entry
                         translation_entry = {
                             "ojibwe_text": ojibwe_text,
                             "english_text": english_texts,
                             "definition": definition,
                         }
-                        validated_entry = validate_translation_entry(translation_entry)
-                        if not validated_entry:
-                            logger.warning(f"Invalid translation entry on {base_url}: {translation_entry}")
-                            continue
-
-                        translations.append(validated_entry)
-                        # Store in SQLite
-                        await sync_to_async(create_ojibwe_to_english_local)(
-                            validated_entry["ojibwe_text"],
-                            validated_entry["english_text"],
-                            version=CURRENT_VERSION
-                        )
-                        for e_text in validated_entry["english_text"]:
-                            await sync_to_async(create_english_to_ojibwe_local)(
-                                e_text,
-                                validated_entry["ojibwe_text"],
-                                validated_entry["definition"],
-                                version=CURRENT_VERSION
-                            )
-                        logger.debug(
-                            f"Stored translation - Ojibwe: {validated_entry['ojibwe_text']}, "
-                            f"English: {validated_entry['english_text']}, "
-                            f"Definition: {validated_entry['definition']}"
-                        )
+                        translations.append(translation_entry)
                     else:
                         logger.debug("No .english-search-main-entry found in this entry")
                 await asyncio.sleep(0.1)  # Small delay to avoid rate limiting
@@ -597,11 +547,14 @@ async def scrape_ojibwe_async() -> List[Dict[str, Union[str, List[str]]]]:
 
     Performs a full scrape if less than 20% of words are translated, otherwise
     targets missing words. Tracks attempted words to avoid redundant scraping.
+    Stores raw data in raw_ojibwe_english_dict.json, then processes it into validated entries.
 
     Returns:
         List[Dict[str, Union[str, List[str]]]]: List of validated translation dictionaries.
     """
-    translations: List[Dict[str, Union[str, List[str]]]] = []
+    # Load existing raw data
+    raw_translations = load_raw_data(RAW_DATA_PATH)
+
     dict_size = await sync_to_async(get_english_dict_size)()
     translation_count = await get_existing_translations_count()
 
@@ -610,65 +563,91 @@ async def scrape_ojibwe_async() -> List[Dict[str, Union[str, List[str]]]]:
     attempted_words = load_attempted_words(attempted_path)
     progress = load_progress(progress_path)
 
+    new_raw_translations: List[Dict[str, Union[str, List[str]]]] = []
+
     if await should_perform_full_scrape():
         logger.info(
             f"Translation coverage is below 20% ({translation_count}/{dict_size}). "
             "Performing full scrape."
         )
         for base_url in URLS:
-            translations.extend(await scrape_full_dictionary(base_url))
+            new_raw_translations.extend(await scrape_full_dictionary(base_url))
     else:
         missing_words = await get_missing_words()
         if not missing_words:
             logger.info("No missing words to scrape.")
-            return translations
-
-        remaining_words = [word for word in missing_words if word not in attempted_words]
-        if not remaining_words:
-            logger.info("All missing words have been attempted. Resetting attempted list.")
-            attempted_words.clear()
-            remaining_words = missing_words
-            progress = {url: "" for url in URLS}
-            save_progress(progress, progress_path)
         else:
+            remaining_words = [word for word in missing_words if word not in attempted_words]
+            if not remaining_words:
+                logger.info("All missing words have been attempted. Resetting attempted list.")
+                attempted_words.clear()
+                remaining_words = missing_words
+                progress = {url: "" for url in URLS}
+                save_progress(progress, progress_path)
+            else:
+                logger.info(
+                    f"Found {len(remaining_words)} unattempted missing words out of "
+                    f"{len(missing_words)} total missing words."
+                )
+
+            words_to_scrape = remaining_words[:SCRAPE_LIMIT]
             logger.info(
-                f"Found {len(remaining_words)} unattempted missing words out of "
-                f"{len(missing_words)} total missing words."
+                f"Attempting to find translations for {len(words_to_scrape)} words "
+                f"(limited to {SCRAPE_LIMIT})."
             )
+            semaphore = asyncio.Semaphore(10)
+            async with aiohttp.ClientSession() as session:
+                tasks = []
+                for word in words_to_scrape:
+                    for base_url in URLS:
+                        last_word = progress.get(base_url, "")
+                        if last_word and word < last_word:
+                            continue
+                        tasks.append(scrape_ojibwe_page(session, base_url, word, semaphore))
+                    attempted_words.add(word)
+                    for url in URLS:
+                        if word > progress.get(url, ""):
+                            progress[url] = word
+                    # Batch writes to reduce I/O
+                    if len(tasks) % 100 == 0:
+                        save_attempted_words(attempted_words, attempted_path)
+                        save_progress(progress, progress_path)
 
-        words_to_scrape = remaining_words[:SCRAPE_LIMIT]
-        logger.info(
-            f"Attempting to find translations for {len(words_to_scrape)} words "
-            f"(limited to {SCRAPE_LIMIT})."
+                # Final write for any remaining updates
+                save_attempted_words(attempted_words, attempted_path)
+                save_progress(progress, progress_path)
+
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                for result in results:
+                    if isinstance(result, list):
+                        new_raw_translations.extend(result)
+
+    # Combine new raw translations with existing ones
+    raw_translations.extend(new_raw_translations)
+    logger.info(f"Scraped {len(new_raw_translations)} new raw Ojibwe translations.")
+
+    # Save raw translations to JSON
+    save_raw_data(raw_translations, RAW_DATA_PATH)
+
+    # Process raw translations into validated entries
+    validated_translations = process_raw_data(raw_translations)
+
+    # Store validated translations in SQLite
+    for entry in validated_translations:
+        await sync_to_async(create_ojibwe_to_english_local)(
+            entry["ojibwe_text"],
+            entry["english_text"],
+            version=CURRENT_VERSION
         )
-        semaphore = asyncio.Semaphore(10)
-        async with aiohttp.ClientSession() as session:
-            tasks = []
-            for word in words_to_scrape:
-                for base_url in URLS:
-                    last_word = progress.get(base_url, "")
-                    if last_word and word < last_word:
-                        continue
-                    tasks.append(scrape_ojibwe_page(session, base_url, word, semaphore))
-                attempted_words.add(word)
-                for url in URLS:
-                    if word > progress.get(url, ""):
-                        progress[url] = word
-                # Batch writes to reduce I/O
-                if len(tasks) % 100 == 0:
-                    save_attempted_words(attempted_words, attempted_path)
-                    save_progress(progress, progress_path)
+        for e_text in entry["english_text"]:
+            await sync_to_async(create_english_to_ojibwe_local)(
+                e_text,
+                entry["ojibwe_text"],
+                entry["definition"],
+                version=CURRENT_VERSION
+            )
+    logger.info(f"Stored {len(validated_translations)} validated Ojibwe translations in SQLite.")
 
-            # Final write for any remaining updates
-            save_attempted_words(attempted_words, attempted_path)
-            save_progress(progress, progress_path)
-
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            for result in results:
-                if isinstance(result, list):
-                    translations.extend(result)
-
-    logger.info(f"Scraped and stored {len(translations)} new Ojibwe translations in SQLite.")
     # Sync to Firestore
     try:
         await sync_to_async(sync_to_firestore)(version=CURRENT_VERSION)
@@ -676,7 +655,8 @@ async def scrape_ojibwe_async() -> List[Dict[str, Union[str, List[str]]]]:
         logger.error(
             f"Error syncing to Firestore: {e}. Data is still stored locally in SQLite."
         )
-    return translations
+
+    return validated_translations
 
 
 def reset_processed_words() -> None:
@@ -689,12 +669,28 @@ def reset_processed_words() -> None:
     logger.info(f"Reset processed_words.json at {processed_path}")
 
 
+def prompt_to_continue() -> bool:
+    """
+    Prompt the user to continue with semantic analysis after scraping.
+
+    Returns:
+        bool: True if the user wants to continue, False otherwise.
+    """
+    print(
+        f"\nScraping completed successfully! Raw data has been saved to {RAW_DATA_PATH}."
+        "\nWould you like to continue with semantic analysis? (Y/n): ",
+        end=""
+    )
+    response = input().strip().lower()
+    return response in ("", "y", "yes")
+
+
 def scrape_ojibwe() -> None:
     """
     Main function to run the scraper and semantic analysis in a loop.
 
-    Scrapes translations, then runs semantic analysis, prompting the user to
-    continue if desired.
+    Scrapes translations, stores raw data, processes it into validated entries,
+    and prompts the user to continue with semantic analysis.
     """
     loop = asyncio.get_event_loop()
     translations = loop.run_until_complete(scrape_ojibwe_async())
@@ -705,12 +701,16 @@ def scrape_ojibwe() -> None:
         )
         reset_processed_words()
 
-    logger.info("Performing semantic analysis on translations...")
-    from translations.utils.analysis import print_semantic_matches  # noqa: E402
+    # Prompt user to continue with semantic analysis
+    if prompt_to_continue():
+        logger.info("Performing semantic analysis on translations...")
+        from translations.utils.analysis import print_semantic_matches  # noqa: E402
 
-    while True:
-        if not print_semantic_matches(threshold=0.85):
-            break
+        while True:
+            if not print_semantic_matches(threshold=0.85):
+                break
+    else:
+        logger.info("User chose not to continue with semantic analysis. Exiting.")
 
 
 if __name__ == "__main__":

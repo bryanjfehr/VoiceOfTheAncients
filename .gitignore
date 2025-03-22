@@ -15,3 +15,4 @@ backend/scraper.log
 backend/firebase_credentials.json
 backend/gcloud_credentials.json
 backend/data/processed_words.json
+backend/translations.db
