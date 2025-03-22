@@ -2,3 +2,8 @@ backend/.env
 backend/venv/*
 backend/initialize_env.ps1
 backend/VOTA initializer.lnk
+backend/data/*
+backend/scrapers/__pycache__/*
+backend/translations/__pycache__/*
+backend/translations/utils/__pycache__/*
+backend/vota_backend/__pycache__/*
