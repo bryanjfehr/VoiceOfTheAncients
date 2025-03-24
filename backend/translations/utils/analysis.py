@@ -236,7 +236,11 @@ def print_semantic_matches(
         return False
 
     # Load Ojibwe translations from Firestore
-    ojibwe_translations = get_all_ojibwe_to_english()
+    ojibwe_translations = get_all_english_to_ojibwe()
+    translated_english = {
+        t["english_text"].lower() for t in ojibwe_translations if t.get("english_text")
+    }
+# Remove get_all_ojibwe_to_english references if not needed
     if not ojibwe_translations:
         logger.error("No Ojibwe translations found in Firestore.")
         return False
