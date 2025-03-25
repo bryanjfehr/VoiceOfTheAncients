@@ -166,8 +166,6 @@ def set_firestore_version(version: str) -> None:
 def sync_to_firestore(version: str = "1.0") -> None:
     """
     Sync SQLite data to Firestore, always syncing all entries.
-
-    Removed version check to ensure all validated entries are pushed.
     """
     try:
         # Sync English-to-Ojibwe

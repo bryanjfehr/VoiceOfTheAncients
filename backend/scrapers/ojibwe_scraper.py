@@ -4,19 +4,21 @@ Scrape Ojibwe translations to build English-Ojibwe dictionaries.
 
 This module scrapes translations from online sources, stores raw data in a JSON file,
 processes it into validated entries, stores them in SQLite, and syncs to Firestore.
-It includes pre-syncing local entries, a progress bar for scraping, and sync verification.
+It includes timestamp-based scraping, duplicate checking, version incrementation,
+and a user prompt for sentiment analysis on sync failure.
 """
 import asyncio
 import json
 import os
 import sqlite3
 import sys
+import time
 from typing import Dict, List, Set, Union
 
 import aiohttp
 from asgiref.sync import sync_to_async
 from bs4 import BeautifulSoup
-from tqdm import tqdm  # Added for progress bar
+from tqdm import tqdm
 
 # Add base directory to system path (two levels up to backend/)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -30,7 +32,7 @@ django.setup()
 
 from translations.utils.logging_config import setup_logging
 
-setup_logging()  # Configure logging for all modules
+setup_logging()
 import logging
 
 logger = logging.getLogger("translations.utils.ojibwe_scraper")
@@ -40,6 +42,8 @@ from translations.models import (
     create_ojibwe_to_english_local,
     get_all_english_to_ojibwe,
     sync_to_firestore,
+    get_firestore_version,
+    set_firestore_version,
 )
 from translations.utils.frequencies import WORD_FREQUENCIES
 from translations.utils.get_dict_size import get_english_dict_size
@@ -71,20 +75,35 @@ HEADERS = {
     ),
 }
 
-# Version for this scrape
-CURRENT_VERSION = "1.0"
-
 # Path to raw data file
 RAW_DATA_PATH = os.path.join(BASE_DIR, "data", "raw_ojibwe_english_dict.json")
 
+# Path to timestamp file
+TIMESTAMP_PATH = os.path.join(BASE_DIR, "data", "timestamps.json")
+
+# One month in seconds (30 days)
+ONE_MONTH_SECONDS = 30 * 24 * 60 * 60
+
+def load_timestamps() -> Dict[str, float]:
+    """Load timestamps from JSON file."""
+    try:
+        with open(TIMESTAMP_PATH, "r", encoding="utf-8") as file:
+            return json.load(file)
+    except FileNotFoundError:
+        return {"last_scrape": 0, "last_sync": 0}
+
+def save_timestamps(timestamps: Dict[str, float]) -> None:
+    """Save timestamps to JSON file."""
+    with open(TIMESTAMP_PATH, "w", encoding="utf-8") as file:
+        json.dump(timestamps, file)
+    logger.info("Updated timestamps in timestamps.json")
 
 async def get_existing_translations_count() -> int:
-    """Count existing Ojibwe-to-English translations in Firestore."""
+    """Count existing English-to-Ojibwe translations in Firestore."""
     translations = await sync_to_async(get_all_english_to_ojibwe)()
     count = sum(1 for t in translations if t.get("english_text"))
     logger.info(f"Found {count} existing English-to-Ojibwe translations in Firestore.")
     return count
-
 
 async def should_perform_full_scrape() -> bool:
     """Determine if a full scrape is needed based on translation coverage."""
@@ -96,7 +115,6 @@ async def should_perform_full_scrape() -> bool:
     coverage = translation_count / dict_size
     logger.info(f"Translation coverage: {coverage:.2%}")
     return coverage < TRANSLATION_THRESHOLD
-
 
 async def get_english_words() -> List[str]:
     """Fetch all English words from SQLite for Glosbe scraping."""
@@ -112,7 +130,6 @@ async def get_english_words() -> List[str]:
         logger.error(f"Error fetching English words from SQLite: {e}")
         return []
 
-
 def load_attempted_words(attempted_path: str) -> Set[str]:
     """Load the set of words already attempted."""
     try:
@@ -124,13 +141,11 @@ def load_attempted_words(attempted_path: str) -> Set[str]:
         logger.info(f"No attempted words file found at {attempted_path}. Starting fresh.")
         return set()
 
-
 def save_attempted_words(attempted_words: Set[str], attempted_path: str) -> None:
     """Save the set of attempted words to a JSON file."""
     with open(attempted_path, "w", encoding="utf-8") as file:
         json.dump(list(attempted_words), file)
     logger.info(f"Saved {len(attempted_words)} attempted words to {attempted_path}.")
-
 
 def load_progress(progress_path: str) -> Dict[str, str]:
     """Load scraping progress from a JSON file."""
@@ -144,13 +159,11 @@ def load_progress(progress_path: str) -> Dict[str, str]:
         logger.info(f"No progress file found at {progress_path}. Starting fresh.")
         return progress
 
-
 def save_progress(progress: Dict[str, str], progress_path: str) -> None:
     """Save scraping progress to a JSON file."""
     with open(progress_path, "w", encoding="utf-8") as file:
         json.dump(progress, file)
     logger.info(f"Saved scraping progress to {progress_path}.")
-
 
 async def fetch_url(
     session: aiohttp.ClientSession,
@@ -178,7 +191,6 @@ async def fetch_url(
                 await asyncio.sleep(2**attempt)  # Exponential backoff
         return ""
 
-
 def is_valid_translation(ojibwe_text: str, english_texts: List[str]) -> bool:
     """Validate a translation to ensure it’s meaningful."""
     if not ojibwe_text or not english_texts:
@@ -189,7 +201,6 @@ def is_valid_translation(ojibwe_text: str, english_texts: List[str]) -> bool:
         return False
     return True
 
-
 async def scrape_ojibwe_page(
     session: aiohttp.ClientSession,
     base_url: str,
@@ -199,7 +210,7 @@ async def scrape_ojibwe_page(
     """Scrape a single Ojibwe translation page for a given word."""
     translations: List[Dict[str, Union[str, List[str]]]] = []
     url = f"{base_url}?utf8=%E2%9C%93&q={word}&search_field=all_fields" if "ojibwe.lib" in base_url else f"{base_url}/{word}"
-    
+
     html = await fetch_url(session, url, semaphore)
     if not html:
         logger.warning(f"No HTML content retrieved from {url}")
@@ -237,7 +248,7 @@ async def scrape_ojibwe_page(
                         definition = span.text.strip()
                         break
                 definition = definition or item.get_text(separator=" ").strip().replace(ojibwe_text, "").strip() or f"{word}: {ojibwe_text}"
-                
+
                 logger.debug(f"Raw data for '{word}': Ojibwe: {ojibwe_text}, English: {english_text}, Def: {definition}")
                 translations.append({"ojibwe_text": ojibwe_text, "english_text": [english_text], "definition": definition})
 
@@ -246,7 +257,6 @@ async def scrape_ojibwe_page(
     else:
         logger.warning(f"No valid translation for '{word}' on {base_url}")
     return translations
-
 
 async def scrape_full_dictionary(base_url: str) -> List[Dict[str, Union[str, List[str]]]]:
     """Scrape the entire dictionary from a single website."""
@@ -286,7 +296,6 @@ async def scrape_full_dictionary(base_url: str) -> List[Dict[str, Union[str, Lis
                     translations.extend(result)
     return translations
 
-
 async def get_missing_words() -> List[str]:
     """Fetch English words missing Ojibwe translations, sorted by frequency."""
     try:
@@ -308,130 +317,163 @@ async def get_missing_words() -> List[str]:
         logger.error(f"Error fetching missing words: {e}")
         return []
 
+def check_duplicates(new_translations: List[Dict], existing_translations: List[Dict]) -> List[Dict]:
+    """Check for duplicates and return only new translations."""
+    existing_set = {(t["english_text"], t["ojibwe_text"]) for t in existing_translations}
+    unique_new = []
+    duplicates_found = 0
+    for trans in new_translations:
+        key = (trans["english_text"][0] if isinstance(trans["english_text"], list) else trans["english_text"], trans["ojibwe_text"])
+        if key in existing_set:
+            duplicates_found += 1
+        else:
+            unique_new.append(trans)
+    logger.info(f"Duplicate check: Found {duplicates_found} duplicates, {len(unique_new)} new translations.")
+    return unique_new
 
 async def scrape_ojibwe_async() -> List[Dict[str, Union[str, List[str]]]]:
     """
-    Scrape Ojibwe translations asynchronously with pre-sync and progress bar.
-
-    Checks local JSON against Firestore, syncs if more entries exist locally,
-    then scrapes with a progress bar, and verifies sync success.
+    Scrape Ojibwe translations asynchronously with timestamp checks and duplicate handling.
     """
-    # Load and process existing raw data
-    raw_translations = load_raw_data(RAW_DATA_PATH)
-    validated_translations = process_raw_data(raw_translations)
-    firestore_count = len(await sync_to_async(get_all_english_to_ojibwe)())
+    timestamps = load_timestamps()
+    current_time = time.time()
 
-    # Pre-sync if more validated entries than in Firestore
-    if len(validated_translations) > firestore_count:
-        logger.info(
-            f"Local entries ({len(validated_translations)}) exceed Firestore "
-            f"({firestore_count}). Pre-syncing to Firestore."
-        )
-        for entry in validated_translations:
-            await sync_to_async(create_ojibwe_to_english_local)(
-                entry["ojibwe_text"], entry["english_text"], version=CURRENT_VERSION
-            )
-            for e_text in entry["english_text"]:
-                await sync_to_async(create_english_to_ojibwe_local)(
-                    e_text, entry["ojibwe_text"], entry["definition"], version=CURRENT_VERSION
-                )
-        await sync_to_async(sync_to_firestore)(version=CURRENT_VERSION)
-
-    # Scrape new data
-    dict_size = await sync_to_async(get_english_dict_size)()
-    translation_count = await get_existing_translations_count()
-    attempted_path = os.path.join(BASE_DIR, "data", "scraped_words.json")
-    progress_path = os.path.join(BASE_DIR, "data", "scrape_progress.json")
-    attempted_words = load_attempted_words(attempted_path)
-    progress = load_progress(progress_path)
-    new_raw_translations: List[Dict[str, Union[str, List[str]]]] = []
-
-    if await should_perform_full_scrape():
-        logger.info(f"Coverage below 20% ({translation_count}/{dict_size}). Full scrape.")
-        for base_url in URLS:
-            new_raw_translations.extend(await scrape_full_dictionary(base_url))
+    # Check if scraping is needed (more than a month since last scrape)
+    if current_time - timestamps.get("last_scrape", 0) < ONE_MONTH_SECONDS:
+        logger.info("Last scrape was less than a month ago. Skipping scrape.")
+        validated_translations = process_raw_data(load_raw_data(RAW_DATA_PATH))
     else:
-        missing_words = await get_missing_words()
-        if not missing_words:
-            logger.info("No missing words to scrape.")
+        # Load and process existing raw data
+        raw_translations = load_raw_data(RAW_DATA_PATH)
+        validated_translations = process_raw_data(raw_translations)
+        firestore_count = len(await sync_to_async(get_all_english_to_ojibwe)())
+
+        # Pre-sync if more validated entries than in Firestore
+        if len(validated_translations) > firestore_count:
+            logger.info(f"Local entries ({len(validated_translations)}) exceed Firestore ({firestore_count}). Pre-syncing.")
+            for entry in validated_translations:
+                await sync_to_async(create_ojibwe_to_english_local)(
+                    entry["ojibwe_text"], entry["english_text"], version=await sync_to_async(get_firestore_version)()
+                )
+                for e_text in entry["english_text"]:
+                    await sync_to_async(create_english_to_ojibwe_local)(
+                        e_text, entry["ojibwe_text"], entry["definition"], version=await sync_to_async(get_firestore_version)()
+                    )
+            await sync_to_async(sync_to_firestore)(version=await sync_to_async(get_firestore_version)())
+
+        # Scrape new data
+        dict_size = await sync_to_async(get_english_dict_size)()
+        translation_count = await get_existing_translations_count()
+        attempted_path = os.path.join(BASE_DIR, "data", "scraped_words.json")
+        progress_path = os.path.join(BASE_DIR, "data", "scrape_progress.json")
+        attempted_words = load_attempted_words(attempted_path)
+        progress = load_progress(progress_path)
+        new_raw_translations: List[Dict[str, Union[str, List[str]]]] = []
+
+        if await should_perform_full_scrape():
+            logger.info(f"Coverage below 20% ({translation_count}/{dict_size}). Full scrape.")
+            for base_url in URLS:
+                new_raw_translations.extend(await scrape_full_dictionary(base_url))
         else:
-            remaining_words = [word for word in missing_words if word not in attempted_words]
-            if not remaining_words:
-                logger.info("All missing words attempted. Resetting list.")
-                attempted_words.clear()
-                remaining_words = missing_words
-                progress = {url: "" for url in URLS}
-                save_progress(progress, progress_path)
+            missing_words = await get_missing_words()
+            if not missing_words:
+                logger.info("No missing words to scrape.")
             else:
-                logger.info(f"Found {len(remaining_words)} unattempted missing words.")
+                remaining_words = [word for word in missing_words if word not in attempted_words]
+                if not remaining_words:
+                    logger.info("All missing words attempted. Resetting list.")
+                    attempted_words.clear()
+                    remaining_words = missing_words
+                    progress = {url: "" for url in URLS}
+                    save_progress(progress, progress_path)
+                else:
+                    logger.info(f"Found {len(remaining_words)} unattempted missing words.")
 
-            words_to_scrape = remaining_words[:SCRAPE_LIMIT]
-            logger.info(f"Scraping {len(words_to_scrape)} words (limit: {SCRAPE_LIMIT}).")
-            semaphore = asyncio.Semaphore(10)
-            async with aiohttp.ClientSession() as session:
-                tasks = []
-                for word in words_to_scrape:
-                    for base_url in URLS:
-                        last_word = progress.get(base_url, "")
-                        if last_word and word < last_word:
-                            continue
-                        tasks.append(scrape_ojibwe_page(session, base_url, word, semaphore))
-                    attempted_words.add(word)
-                    for url in URLS:
-                        if word > progress.get(url, ""):
-                            progress[url] = word
-                    if len(tasks) % 100 == 0:
-                        save_attempted_words(attempted_words, attempted_path)
-                        save_progress(progress, progress_path)
+                words_to_scrape = remaining_words[:SCRAPE_LIMIT]
+                logger.info(f"Scraping {len(words_to_scrape)} words (limit: {SCRAPE_LIMIT}).")
+                semaphore = asyncio.Semaphore(10)
+                async with aiohttp.ClientSession() as session:
+                    tasks = []
+                    for word in words_to_scrape:
+                        for base_url in URLS:
+                            last_word = progress.get(base_url, "")
+                            if last_word and word < last_word:
+                                continue
+                            tasks.append(scrape_ojibwe_page(session, base_url, word, semaphore))
+                        attempted_words.add(word)
+                        for url in URLS:
+                            if word > progress.get(url, ""):
+                                progress[url] = word
+                        if len(tasks) % 100 == 0:
+                            save_attempted_words(attempted_words, attempted_path)
+                            save_progress(progress, progress_path)
 
-                save_attempted_words(attempted_words, attempted_path)
-                save_progress(progress, progress_path)
+                    save_attempted_words(attempted_words, attempted_path)
+                    save_progress(progress, progress_path)
 
-                # Scrape with progress bar
-                logger.setLevel(logging.WARNING)  # Reduce verbosity during scraping
-                with tqdm(total=len(tasks), desc="Scraping translations", unit="task") as pbar:
-                    for future in asyncio.as_completed(tasks):
-                        result = await future
-                        if isinstance(result, list):
-                            new_raw_translations.extend(result)
-                        pbar.update(1)
-                logger.setLevel(logging.INFO)  # Restore logging level
+                    logger.setLevel(logging.WARNING)
+                    with tqdm(total=len(tasks), desc="Scraping translations", unit="task") as pbar:
+                        for future in asyncio.as_completed(tasks):
+                            result = await future
+                            if isinstance(result, list):
+                                new_raw_translations.extend(result)
+                            pbar.update(1)
+                    logger.setLevel(logging.INFO)
 
-    # Combine and save new raw translations
-    raw_translations.extend(new_raw_translations)
-    logger.info(f"Scraped {len(new_raw_translations)} new raw translations.")
-    save_raw_data(raw_translations, RAW_DATA_PATH)
+        # Combine and save new raw translations
+        raw_translations.extend(new_raw_translations)
+        logger.info(f"Scraped {len(new_raw_translations)} new raw translations.")
+        save_raw_data(raw_translations, RAW_DATA_PATH)
+        timestamps["last_scrape"] = current_time
+        save_timestamps(timestamps)
 
-    # Process into validated entries
-    validated_translations = process_raw_data(raw_translations)
+        # Process into validated entries
+        validated_translations = process_raw_data(raw_translations)
+
+    # Fetch existing Firestore data for duplicate check
+    existing_translations = await sync_to_async(get_all_english_to_ojibwe)()
+    unique_new_translations = check_duplicates(validated_translations, existing_translations)
+
+    # Clean up data (remove invalid entries)
+    cleaned_translations = [t for t in unique_new_translations if is_valid_translation(t["ojibwe_text"], t["english_text"])]
+    logger.info(f"After cleanup: {len(cleaned_translations)} valid translations remain.")
 
     # Store in SQLite
-    for entry in validated_translations:
+    current_version = await sync_to_async(get_firestore_version)()
+    for entry in cleaned_translations:
         await sync_to_async(create_ojibwe_to_english_local)(
-            entry["ojibwe_text"], entry["english_text"], version=CURRENT_VERSION
+            entry["ojibwe_text"], entry["english_text"], version=current_version
         )
         for e_text in entry["english_text"]:
             await sync_to_async(create_english_to_ojibwe_local)(
-                e_text, entry["ojibwe_text"], entry["definition"], version=CURRENT_VERSION
+                e_text, entry["ojibwe_text"], entry["definition"], version=current_version
             )
-    logger.info(f"Stored {len(validated_translations)} validated translations in SQLite.")
+    logger.info(f"Stored {len(cleaned_translations)} validated translations in SQLite.")
 
-    # Sync to Firestore and verify
-    try:
-        await sync_to_async(sync_to_firestore)(version=CURRENT_VERSION)
-        firestore_entries = len(await sync_to_async(get_all_english_to_ojibwe)())
-        if firestore_entries >= len(validated_translations):
-            logger.info(f"Sync successful: {firestore_entries} entries in Firestore.")
-        else:
-            logger.warning(
-                f"Sync incomplete: {firestore_entries} in Firestore, "
-                f"expected {len(validated_translations)}."
-            )
-    except Exception as e:
-        logger.error(f"Error syncing to Firestore: {e}. Data stored locally in SQLite.")
+    # Sync to Firestore if new translations exist
+    if cleaned_translations:
+        try:
+            # Increment version
+            version_parts = current_version.split(".")
+            new_version = f"{version_parts[0]}.{int(version_parts[1]) + 1}"
+            await sync_to_async(sync_to_firestore)(version=new_version)
+            firestore_entries = len(await sync_to_async(get_all_english_to_ojibwe)())
+            if firestore_entries >= len(cleaned_translations) + len(existing_translations):
+                logger.info(f"Sync successful: {firestore_entries} entries in Firestore.")
+                timestamps["last_sync"] = current_time
+                save_timestamps(timestamps)
+            else:
+                logger.warning(f"Sync incomplete: {firestore_entries} in Firestore, expected {len(cleaned_translations) + len(existing_translations)}.")
+        except Exception as e:
+            logger.error(f"Error syncing to Firestore: {e}. Data stored locally in SQLite.")
+            if prompt_to_continue_on_sync_failure():
+                return cleaned_translations
+            else:
+                return []
+    else:
+        logger.info("No new unique translations to sync.")
 
-    return validated_translations
-
+    return cleaned_translations
 
 def reset_processed_words() -> None:
     """Reset the processed_words.json file."""
@@ -440,16 +482,20 @@ def reset_processed_words() -> None:
         json.dump([], f)
     logger.info(f"Reset processed_words.json at {processed_path}")
 
-
-def prompt_to_continue() -> bool:
-    """Prompt user to continue with semantic analysis."""
-    print(f"\nScraping completed! Raw data saved to {RAW_DATA_PATH}.")
-    print("Continue with semantic analysis? (Y/n): ", end="")
+def prompt_to_continue_on_sync_failure() -> bool:
+    """Prompt user to continue with sentiment analysis if sync fails."""
+    print("\nSyncing to Firestore failed. Data is stored locally in SQLite.")
+    print("Continue with sentiment analysis? (Y/n): ", end="")
     return input().strip().lower() in ("", "y", "yes")
 
+def prompt_to_continue() -> bool:
+    """Prompt user to continue with sentiment analysis."""
+    print(f"\nScraping completed! Raw data saved to {RAW_DATA_PATH}.")
+    print("Continue with sentiment analysis? (Y/n): ", end="")
+    return input().strip().lower() in ("", "y", "yes")
 
 def scrape_ojibwe() -> None:
-    """Main function to run the scraper and optional semantic analysis."""
+    """Main function to run the scraper and optional sentiment analysis."""
     loop = asyncio.get_event_loop()
     translations = loop.run_until_complete(scrape_ojibwe_async())
     if translations:
@@ -459,8 +505,7 @@ def scrape_ojibwe() -> None:
         while print_semantic_matches(threshold=0.85):
             pass
     else:
-        logger.info("User opted not to perform semantic analysis.")
-
+        logger.info("User opted not to perform sentiment analysis.")
 
 if __name__ == "__main__":
     scrape_ojibwe()

@@ -2,8 +2,8 @@
 """
 Logging configuration for the Voice of the Ancients project.
 
-This module sets up separate loggers for the scraper, analysis, and models components,
-ensuring that logs are written to their respective files (scraper.log, analysis.log, models.log)
+This module sets up separate loggers for the scraper, analysis, models, and process_raw_data components,
+ensuring that logs are written to their respective files (scraper.log, analysis.log, models.log, process_raw_data.log)
 and also output to the console for debugging.
 """
 import logging
@@ -20,6 +20,7 @@ def setup_logging():
     - Scraper logs go to scraper.log and stdout.
     - Analysis logs go to analysis.log and stdout.
     - Models logs go to models.log and stdout.
+    - Process raw data logs go to process_raw_data.log and stdout.
     All loggers are set to INFO level with a consistent format.
     """
     # Configure logger for scraper
@@ -51,3 +52,13 @@ def setup_logging():
     models_logger.addHandler(models_handler)
     models_logger.addHandler(logging.StreamHandler())
     models_logger.setLevel(logging.INFO)
+
+    # Configure logger for process_raw_data
+    process_logger = logging.getLogger("translations.utils.process_raw_data")
+    process_handler = logging.FileHandler(os.path.join(BASE_DIR, "process_raw_data.log"))
+    process_handler.setFormatter(
+        logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+    )
+    process_logger.addHandler(process_handler)
+    process_logger.addHandler(logging.StreamHandler())
+    process_logger.setLevel(logging.INFO)
