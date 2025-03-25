@@ -12,6 +12,18 @@ import ListItem from '@mui/material/ListItem';
 import ListItemText from '@mui/material/ListItemText';
 import Box from '@mui/material/Box';
 
+// Configure the base URL for API requests
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://127.0.0.1:8000';
+
+// Set up axios with the base URL
+const api = axios.create({
+  baseURL: API_BASE_URL,
+  timeout: 5000, // 5 seconds timeout
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
+
 function Research() {
   const [translations, setTranslations] = useState([]);
   const [matches, setMatches] = useState([]);
@@ -21,7 +33,7 @@ function Research() {
 
   useEffect(() => {
     // Fetch English-to-Ojibwe translations
-    axios.get('http://127.0.0.1:8000/api/english-to-ojibwe/')
+    api.get('/api/english-to-ojibwe/')
       .then(response => {
         console.log('English to Ojibwe:', response.data);
         setTranslations(response.data);
@@ -35,7 +47,7 @@ function Research() {
       });
 
     // Fetch semantic matches
-    axios.get('http://127.0.0.1:8000/api/semantic-matches/')
+    api.get('/api/semantic-matches/')
       .then(response => {
         console.log('Semantic Matches:', response.data);
         setMatches(response.data);
@@ -49,7 +61,7 @@ function Research() {
       });
 
     // Fetch missing common translations
-    axios.get('http://127.0.0.1:8000/api/missing-common-translations/')
+    api.get('/api/missing-common-translations/')
       .then(response => {
         console.log('Missing Common Translations:', response.data);
         setMissing(response.data);

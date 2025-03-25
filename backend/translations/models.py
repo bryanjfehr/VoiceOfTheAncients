@@ -2,7 +2,7 @@
 """
 Models for translation data management using Firestore and Django ORM for SQLite.
 
-Manages local SQLite storage and Firestore syncing with versioning and retry logic.
+Manages local SQLite storage and Firestore syncing with versioning.
 Ensures all validated entries are synced without version skipping.
 """
 import logging
@@ -10,10 +10,16 @@ import os
 import re
 from typing import List
 
-import firebase_admin
 from django.db import models
-from firebase_admin import credentials, firestore
-from google.api_core import retry
+
+# Try to import Firebase dependencies, handle if not available
+try:
+    import firebase_admin
+    from firebase_admin import credentials, firestore
+    FIREBASE_AVAILABLE = True
+except ImportError as e:
+    FIREBASE_AVAILABLE = False
+    print(f"Firebase dependencies not available: {e}. Firestore operations will be skipped.")
 
 from translations.utils.definition_utils import is_valid_definition, format_definition
 
@@ -24,9 +30,16 @@ cred_path = os.path.join(BASE_DIR, "firebase_credentials.json")
 
 def initialize_firebase():
     """Initialize Firebase app if not already done."""
+    if not FIREBASE_AVAILABLE:
+        logger.error("Firebase is not available. Cannot initialize.")
+        return None
     if not firebase_admin._apps:
-        cred = credentials.Certificate(cred_path)
-        firebase_admin.initialize_app(cred)
+        try:
+            cred = credentials.Certificate(cred_path)
+            firebase_admin.initialize_app(cred)
+        except Exception as e:
+            logger.error(f"Failed to initialize Firebase: {e}")
+            return None
     return firestore.client()
 
 db = None
@@ -34,6 +47,9 @@ db = None
 def get_firestore_client():
     """Get Firestore client, initializing if necessary."""
     global db
+    if not FIREBASE_AVAILABLE:
+        logger.warning("Firestore client unavailable due to missing dependencies.")
+        return None
     if db is None:
         db = initialize_firebase()
     return db
@@ -41,6 +57,13 @@ def get_firestore_client():
 def get_collections():
     """Get Firestore collections."""
     client = get_firestore_client()
+    if client is None:
+        logger.warning("Cannot access Firestore collections: client is None.")
+        return {
+            "english_to_ojibwe": None,
+            "ojibwe_to_english": None,
+            "version": None,
+        }
     return {
         "english_to_ojibwe": client.collection("english_to_ojibwe"),
         "ojibwe_to_english": client.collection("ojibwe_to_english"),
@@ -141,9 +164,11 @@ def get_all_ojibwe_to_english_local(version: str = "1.0") -> list[dict]:
         logger.error(f"Error retrieving Ojibwe-to-English from SQLite: {e}")
         return []
 
-@retry.Retry(predicate=retry.if_transient_error, timeout=60, initial=1, maximum=10)
 def get_firestore_version() -> str:
     """Retrieve current Firestore version."""
+    if not FIREBASE_AVAILABLE:
+        logger.warning("Firestore unavailable. Returning default version.")
+        return "1.0"
     try:
         version_doc = get_collections()["version"].document("current_version").get()
         version = version_doc.to_dict().get("version", "1.0") if version_doc.exists else "1.0"
@@ -151,22 +176,26 @@ def get_firestore_version() -> str:
         return version
     except Exception as e:
         logger.error(f"Error retrieving Firestore version: {e}")
-        raise
+        return "1.0"
 
-@retry.Retry(predicate=retry.if_transient_error, timeout=60, initial=1, maximum=10)
 def set_firestore_version(version: str) -> None:
     """Set Firestore version."""
+    if not FIREBASE_AVAILABLE:
+        logger.warning("Firestore unavailable. Skipping version set.")
+        return
     try:
         get_collections()["version"].document("current_version").set({"version": version})
         logger.info(f"Set Firestore version to {version}.")
     except Exception as e:
         logger.error(f"Error setting Firestore version: {e}")
-        raise
 
 def sync_to_firestore(version: str = "1.0") -> None:
     """
     Sync SQLite data to Firestore, always syncing all entries.
     """
+    if not FIREBASE_AVAILABLE:
+        logger.warning("Firestore unavailable. Skipping sync.")
+        return
     try:
         # Sync English-to-Ojibwe
         entries = get_all_english_to_ojibwe_local(version)
@@ -179,7 +208,6 @@ def sync_to_firestore(version: str = "1.0") -> None:
             doc_id = sanitize_document_id(entry["english_text"])
             doc_ref = get_collections()["english_to_ojibwe"].document(doc_id)
 
-            @retry.Retry(predicate=retry.if_transient_error, timeout=60, initial=1, maximum=10)
             def set_doc():
                 doc_ref.set({
                     "english_text": entry["english_text"],
@@ -196,7 +224,6 @@ def sync_to_firestore(version: str = "1.0") -> None:
             doc_id = sanitize_document_id(entry["ojibwe_text"])
             doc_ref = get_collections()["ojibwe_to_english"].document(doc_id)
 
-            @retry.Retry(predicate=retry.if_transient_error, timeout=60, initial=1, maximum=10)
             def set_doc():
                 doc_ref.set({
                     "ojibwe_text": entry["ojibwe_text"],
@@ -210,9 +237,11 @@ def sync_to_firestore(version: str = "1.0") -> None:
         logger.error(f"Error syncing to Firestore: {e}")
         raise
 
-@retry.Retry(predicate=retry.if_transient_error, timeout=60, initial=1, maximum=10)
 def create_english_to_ojibwe(english_text: str, ojibwe_text: str) -> None:
     """Insert English-to-Ojibwe translation into Firestore."""
+    if not FIREBASE_AVAILABLE:
+        logger.warning("Firestore unavailable. Skipping create.")
+        return
     try:
         doc_id = sanitize_document_id(english_text)
         get_collections()["english_to_ojibwe"].document(doc_id).set({
@@ -222,11 +251,12 @@ def create_english_to_ojibwe(english_text: str, ojibwe_text: str) -> None:
         logger.info(f"Created English-to-Ojibwe in Firestore: {english_text}")
     except Exception as e:
         logger.error(f"Error creating English-to-Ojibwe in Firestore: {e}")
-        raise
 
-@retry.Retry(predicate=retry.if_transient_error, timeout=60, initial=1, maximum=10)
 def create_ojibwe_to_english(ojibwe_text: str, english_text: list) -> None:
     """Insert Ojibwe-to-English translation into Firestore."""
+    if not FIREBASE_AVAILABLE:
+        logger.warning("Firestore unavailable. Skipping create.")
+        return
     try:
         doc_id = sanitize_document_id(ojibwe_text)
         get_collections()["ojibwe_to_english"].document(doc_id).set({
@@ -236,13 +266,14 @@ def create_ojibwe_to_english(ojibwe_text: str, english_text: list) -> None:
         logger.info(f"Created Ojibwe-to-English in Firestore: {ojibwe_text}")
     except Exception as e:
         logger.error(f"Error creating Ojibwe-to-English in Firestore: {e}")
-        raise
 
-@retry.Retry(predicate=retry.if_transient_error, timeout=60, initial=1, maximum=10)
 def update_or_create_english_to_ojibwe(
     english_text: str, ojibwe_text: str, definition: str = ""
 ) -> None:
     """Update or create English-to-Ojibwe in Firestore."""
+    if not FIREBASE_AVAILABLE:
+        logger.warning("Firestore unavailable. Skipping update/create.")
+        return
     try:
         formatted_def = format_definition(definition) if definition else ""
         if definition and not formatted_def:
@@ -263,11 +294,12 @@ def update_or_create_english_to_ojibwe(
             logger.info(f"Created English-to-Ojibwe in Firestore: {english_text}")
     except Exception as e:
         logger.error(f"Error updating/creating English-to-Ojibwe in Firestore: {e}")
-        raise
 
-@retry.Retry(predicate=retry.if_transient_error, timeout=60, initial=1, maximum=10)
 def update_or_create_ojibwe_to_english(ojibwe_text: str, english_text: list) -> None:
     """Update or create Ojibwe-to-English in Firestore."""
+    if not FIREBASE_AVAILABLE:
+        logger.warning("Firestore unavailable. Skipping update/create.")
+        return
     try:
         doc_id = sanitize_document_id(ojibwe_text)
         doc_ref = get_collections()["ojibwe_to_english"].document(doc_id)
@@ -282,31 +314,32 @@ def update_or_create_ojibwe_to_english(ojibwe_text: str, english_text: list) -> 
             create_ojibwe_to_english(ojibwe_text, english_texts)
     except Exception as e:
         logger.error(f"Error updating/creating Ojibwe-to-English in Firestore: {e}")
-        raise
 
-@retry.Retry(predicate=retry.if_transient_error, timeout=60, initial=1, maximum=10)
 def get_all_english_to_ojibwe() -> list[dict]:
-    """Retrieve all English-to-Ojibwe translations from Firestore."""
-    try:
-        docs = get_collections()["english_to_ojibwe"].stream()
-        result = [doc.to_dict() for doc in docs]
-        logger.info(f"Retrieved {len(result)} English-to-Ojibwe from Firestore.")
-        return result
-    except Exception as e:
-        logger.error(f"Error retrieving English-to-Ojibwe from Firestore: {e}")
-        raise
+    """Retrieve all English-to-Ojibwe translations from Firestore, fall back to SQLite if Firestore is unavailable."""
+    if FIREBASE_AVAILABLE:
+        try:
+            docs = get_collections()["english_to_ojibwe"].stream()
+            result = [doc.to_dict() for doc in docs]
+            logger.info(f"Retrieved {len(result)} English-to-Ojibwe from Firestore.")
+            return result
+        except Exception as e:
+            logger.error(f"Error retrieving English-to-Ojibwe from Firestore: {e}")
+    logger.warning("Falling back to SQLite for English-to-Ojibwe translations.")
+    return get_all_english_to_ojibwe_local()
 
-@retry.Retry(predicate=retry.if_transient_error, timeout=60, initial=1, maximum=10)
 def get_all_ojibwe_to_english() -> list[dict]:
-    """Retrieve all Ojibwe-to-English translations from Firestore."""
-    try:
-        docs = get_collections()["ojibwe_to_english"].stream()
-        result = [doc.to_dict() for doc in docs]
-        logger.info(f"Retrieved {len(result)} Ojibwe-to-English from Firestore.")
-        return result
-    except Exception as e:
-        logger.error(f"Error retrieving Ojibwe-to-English from Firestore: {e}")
-        raise
+    """Retrieve all Ojibwe-to-English translations from Firestore, fall back to SQLite if Firestore is unavailable."""
+    if FIREBASE_AVAILABLE:
+        try:
+            docs = get_collections()["ojibwe_to_english"].stream()
+            result = [doc.to_dict() for doc in docs]
+            logger.info(f"Retrieved {len(result)} Ojibwe-to-English from Firestore.")
+            return result
+        except Exception as e:
+            logger.error(f"Error retrieving Ojibwe-to-English from Firestore: {e}")
+    logger.warning("Falling back to SQLite for Ojibwe-to-English translations.")
+    return get_all_ojibwe_to_english_local()
 
 class EnglishWord(models.Model):
     """SQLite model for English words."""

@@ -1,4 +1,5 @@
-# translations/urls.py
+# backend/translations/urls.py
+"""URL configuration for the translations app."""
 from django.urls import path
 from .views import (
     UpdateDictionaryView,

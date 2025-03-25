@@ -1,4 +1,7 @@
-"""Django settings for the Voice of the Ancients backend."""
+# backend/vota_backend/settings.py
+"""
+Django settings for the Voice of the Ancients backend.
+"""
 from pathlib import Path
 from decouple import config
 import os
@@ -9,8 +12,13 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 # Security settings
 SECRET_KEY = config("DJANGO_SECRET_KEY")
-DEBUG = False
-ALLOWED_HOSTS = ["voiceoftheancients.ca", "www.voiceoftheancients.ca"]
+DEBUG = True  # Enable debug for local development
+ALLOWED_HOSTS = [
+    "voiceoftheancients.ca",
+    "www.voiceoftheancients.ca",
+    "127.0.0.1",  # Add for local development
+    "localhost",
+]
 
 # Application definition
 INSTALLED_APPS = [
@@ -103,9 +111,11 @@ STATICFILES_DIRS = [BASE_DIR / "static"]
 # Security settings
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-ALLOWED_HOSTS = ["voiceoftheancients.ca"]
-CORS_ALLOW_ALL_ORIGINS = False
+# CORS settings
+CORS_ALLOW_ALL_ORIGINS = False  # Disable allow all origins for security
 CORS_ALLOWED_ORIGINS = [
     "http://voiceoftheancients.ca",
     "https://voiceoftheancients.ca",
+    "http://localhost:3000",  # Add for React frontend during development
+    "http://127.0.0.1:3000",
 ]
