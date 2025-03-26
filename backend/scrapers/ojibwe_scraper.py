@@ -3,9 +3,8 @@
 Scrape Ojibwe translations to build English-Ojibwe dictionaries.
 
 This module scrapes translations from online sources, stores raw data in a JSON file,
-processes it into validated entries, stores them in SQLite, and syncs to Firestore.
-It includes timestamp-based scraping, duplicate checking, version incrementation,
-and a user prompt for sentiment analysis on sync failure.
+processes it into validated entries, stores them in SQLite, performs semantic analysis,
+and syncs to Firestore with duplicate checking.
 """
 import asyncio
 import json
@@ -41,9 +40,12 @@ from translations.models import (
     create_english_to_ojibwe_local,
     create_ojibwe_to_english_local,
     get_all_english_to_ojibwe,
+    get_all_semantic_matches,
+    sync_english_dict_to_firestore,
     sync_to_firestore,
     get_firestore_version,
     set_firestore_version,
+    create_missing_translation_local,
 )
 from translations.utils.frequencies import WORD_FREQUENCIES
 from translations.utils.get_dict_size import get_english_dict_size
@@ -83,6 +85,9 @@ TIMESTAMP_PATH = os.path.join(BASE_DIR, "data", "timestamps.json")
 
 # One month in seconds (30 days)
 ONE_MONTH_SECONDS = 30 * 24 * 60 * 60
+
+# Semantic similarity threshold
+SEMANTIC_THRESHOLD = 0.7
 
 def load_timestamps() -> Dict[str, float]:
     """Load timestamps from JSON file."""
@@ -331,14 +336,36 @@ def check_duplicates(new_translations: List[Dict], existing_translations: List[D
     logger.info(f"Duplicate check: Found {duplicates_found} duplicates, {len(unique_new)} new translations.")
     return unique_new
 
+def check_semantic_duplicates(new_matches: List[Dict], existing_matches: List[Dict]) -> List[Dict]:
+    """Check for duplicate semantic matches and return only new ones."""
+    existing_set = {(m["english_text"], m["ojibwe_text"]) for m in existing_matches}
+    unique_new = []
+    duplicates_found = 0
+    for match in new_matches:
+        key = (match["english_text"], match["ojibwe_text"])
+        if key in existing_set:
+            duplicates_found += 1
+        else:
+            unique_new.append(match)
+    logger.info(f"Semantic duplicate check: Found {duplicates_found} duplicates, {len(unique_new)} new matches.")
+    return unique_new
+
 async def scrape_ojibwe_async() -> List[Dict[str, Union[str, List[str]]]]:
     """
-    Scrape Ojibwe translations asynchronously with timestamp checks and duplicate handling.
+    Scrape Ojibwe translations, perform semantic analysis, and sync to Firestore.
     """
+    # Step 1: Sync english_dict to Firestore
+    await sync_to_async(sync_english_dict_to_firestore)()
+    logger.info("Synced english_dict to Firestore.")
+
     timestamps = load_timestamps()
     current_time = time.time()
 
-    # Check if scraping is needed (more than a month since last scrape)
+    # Step 2: Pull existing translations from Firestore
+    existing_translations = await sync_to_async(get_all_english_to_ojibwe)()
+    logger.info(f"Pulled {len(existing_translations)} translations from Firestore.")
+
+    # Step 3: Check if scraping is needed (more than a month since last scrape)
     if current_time - timestamps.get("last_scrape", 0) < ONE_MONTH_SECONDS:
         logger.info("Last scrape was less than a month ago. Skipping scrape.")
         validated_translations = process_raw_data(load_raw_data(RAW_DATA_PATH))
@@ -346,7 +373,7 @@ async def scrape_ojibwe_async() -> List[Dict[str, Union[str, List[str]]]]:
         # Load and process existing raw data
         raw_translations = load_raw_data(RAW_DATA_PATH)
         validated_translations = process_raw_data(raw_translations)
-        firestore_count = len(await sync_to_async(get_all_english_to_ojibwe)())
+        firestore_count = len(existing_translations)
 
         # Pre-sync if more validated entries than in Firestore
         if len(validated_translations) > firestore_count:
@@ -430,15 +457,11 @@ async def scrape_ojibwe_async() -> List[Dict[str, Union[str, List[str]]]]:
         # Process into validated entries
         validated_translations = process_raw_data(raw_translations)
 
-    # Fetch existing Firestore data for duplicate check
-    existing_translations = await sync_to_async(get_all_english_to_ojibwe)()
+    # Step 4: Check for duplicates and store translations in SQLite
     unique_new_translations = check_duplicates(validated_translations, existing_translations)
-
-    # Clean up data (remove invalid entries)
     cleaned_translations = [t for t in unique_new_translations if is_valid_translation(t["ojibwe_text"], t["english_text"])]
     logger.info(f"After cleanup: {len(cleaned_translations)} valid translations remain.")
 
-    # Store in SQLite
     current_version = await sync_to_async(get_firestore_version)()
     for entry in cleaned_translations:
         await sync_to_async(create_ojibwe_to_english_local)(
@@ -450,20 +473,60 @@ async def scrape_ojibwe_async() -> List[Dict[str, Union[str, List[str]]]]:
             )
     logger.info(f"Stored {len(cleaned_translations)} validated translations in SQLite.")
 
-    # Sync to Firestore if new translations exist
-    if cleaned_translations:
+    # Step 5: Compute and store missing common translations
+    top_n = 1000
+    sorted_words = sorted(WORD_FREQUENCIES.items(), key=lambda x: x[1], reverse=True)[:top_n]
+    common_words = {word.lower() for word, _ in sorted_words if len(word) >= 2}
+    translated_english = {t["english_text"].lower() for t in existing_translations}
+    missing_common_words = common_words - translated_english
+    missing_common_words = sorted(missing_common_words, key=lambda x: WORD_FREQUENCIES.get(x, 0), reverse=True)
+    logger.info(f"Found {len(missing_common_words)} missing common words.")
+
+    # Store missing translations in SQLite
+    for word in missing_common_words:
+        await sync_to_async(create_missing_translation_local)(
+            english_text=word,
+            frequency=WORD_FREQUENCIES.get(word, 0),
+            version=current_version,
+        )
+    logger.info(f"Stored {len(missing_common_words)} missing translations in SQLite.")
+
+    # Step 6: Perform semantic analysis
+    semantic_matches = []
+    try:
+        matches = await sync_to_async(print_semantic_matches)(threshold=SEMANTIC_THRESHOLD)
+        if matches:
+            semantic_matches.extend(matches)
+            logger.info(f"Generated {len(semantic_matches)} semantic matches above threshold {SEMANTIC_THRESHOLD}.")
+        else:
+            logger.info("No semantic matches found above threshold.")
+    except Exception as e:
+        logger.error(f"Error during semantic analysis: {e}")
+
+    # Step 7: Pull existing semantic matches from Firestore and check for duplicates
+    existing_semantic_matches = await sync_to_async(get_all_semantic_matches)()
+    logger.info(f"Existing semantic matches in Firestore: {len(existing_semantic_matches)}")
+    new_semantic_matches = check_semantic_duplicates(semantic_matches, existing_semantic_matches)
+    logger.info(f"After duplicate check, {len(new_semantic_matches)} new semantic matches to sync.")
+
+    # Step 8: Sync to Firestore if there are new entries
+    if cleaned_translations or new_semantic_matches:
         try:
             # Increment version
             version_parts = current_version.split(".")
             new_version = f"{version_parts[0]}.{int(version_parts[1]) + 1}"
+            logger.info(f"Starting sync to Firestore with version {new_version}.")
             await sync_to_async(sync_to_firestore)(version=new_version)
             firestore_entries = len(await sync_to_async(get_all_english_to_ojibwe)())
-            if firestore_entries >= len(cleaned_translations) + len(existing_translations):
-                logger.info(f"Sync successful: {firestore_entries} entries in Firestore.")
+            firestore_matches = len(await sync_to_async(get_all_semantic_matches)())
+            expected_entries = len(cleaned_translations) + len(existing_translations)
+            expected_matches = len(new_semantic_matches) + len(existing_semantic_matches)
+            if firestore_entries >= expected_entries and firestore_matches >= expected_matches:
+                logger.info(f"Sync successful: {firestore_entries} translation entries, {firestore_matches} semantic matches in Firestore.")
                 timestamps["last_sync"] = current_time
                 save_timestamps(timestamps)
             else:
-                logger.warning(f"Sync incomplete: {firestore_entries} in Firestore, expected {len(cleaned_translations) + len(existing_translations)}.")
+                logger.warning(f"Sync incomplete: {firestore_entries} translations (expected {expected_entries}), {firestore_matches} matches (expected {expected_matches}).")
         except Exception as e:
             logger.error(f"Error syncing to Firestore: {e}. Data stored locally in SQLite.")
             if prompt_to_continue_on_sync_failure():
@@ -471,7 +534,7 @@ async def scrape_ojibwe_async() -> List[Dict[str, Union[str, List[str]]]]:
             else:
                 return []
     else:
-        logger.info("No new unique translations to sync.")
+        logger.info("No new translations or semantic matches to sync.")
 
     return cleaned_translations
 
@@ -502,7 +565,7 @@ def scrape_ojibwe() -> None:
         reset_processed_words()
     if prompt_to_continue():
         from translations.utils.analysis import print_semantic_matches
-        while print_semantic_matches(threshold=0.85):
+        while print_semantic_matches(threshold=SEMANTIC_THRESHOLD):
             pass
     else:
         logger.info("User opted not to perform sentiment analysis.")

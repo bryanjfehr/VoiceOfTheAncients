@@ -70,17 +70,28 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "vota_backend.wsgi.application"
 
-# Database configuration (SQLite for Django, pymongo for MongoDB)
+# Database configuration
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": BASE_DIR / "db.sqlite3",
     },
-    "sqlite": {
+    "translations": {
         "ENGINE": "django.db.backends.sqlite3",
         "NAME": ":memory:" if "test" in sys.argv else BASE_DIR / "translations.db",
     },
+    "semantic_matches": {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": BASE_DIR / "semantic_matches.db",
+    },
+    "untranslated_words": {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": BASE_DIR / "untranslated_words.db",
+    },
 }
+
+# Database routers
+DATABASE_ROUTERS = ['translations.routers.DatabaseRouter']
 
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [

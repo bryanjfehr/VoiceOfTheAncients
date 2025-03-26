@@ -30,6 +30,8 @@ function Research() {
   const [missing, setMissing] = useState([]);
   const [sortOrder, setSortOrder] = useState('asc'); // For sorting matches
   const [tabValue, setTabValue] = useState(0); // For tab selection
+  const [missingPage, setMissingPage] = useState(0); // For missing translations pagination
+  const wordsPerPage = 1000;
 
   useEffect(() => {
     // Fetch English-to-Ojibwe translations
@@ -97,6 +99,12 @@ function Research() {
     return { type: '', def: definition };
   };
 
+  // Calculate current page of missing translations
+  const currentMissing = missing.slice(
+    missingPage * wordsPerPage,
+    (missingPage + 1) * wordsPerPage
+  );
+
   return (
     <Box sx={{ py: 4 }}>
       <Typography variant="h1" align="center" gutterBottom>
@@ -163,35 +171,61 @@ function Research() {
               Sort by Similarity ({sortOrder === 'asc' ? 'Ascending' : 'Descending'})
             </Button>
             <Box sx={{ maxHeight: '400px', overflowY: 'auto' }}>
-              <List>
-                {sortedMatches.map((match) => (
-                  <ListItem key={match.index}>
-                    <ListItemText
-                      primary={
-                        <>
-                          {match.english_text} ⇒ {match.ojibwe_text}
-                          <Typography component="span" variant="body2" sx={{ ml: 1, color: 'text.secondary' }}>
-                            (Index: {match.index})
-                          </Typography>
-                        </>
-                      }
-                      secondary={
-                        <>
-                          <Typography component="span" sx={{ fontStyle: 'italic' }}>
-                            Similarity: {match.similarity.toFixed(2)}
-                          </Typography>
-                          <Typography component="div" variant="body2">
-                            English Definition: {match.english_definition}
-                          </Typography>
-                          <Typography component="div" variant="body2">
-                            Ojibwe Definition: {match.ojibwe_definition}
-                          </Typography>
-                        </>
-                      }
-                    />
-                  </ListItem>
-                ))}
-              </List>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr>
+                    <th style={{ border: '1px solid #ddd', padding: '8px' }}>Match 1</th>
+                    <th style={{ border: '1px solid #ddd', padding: '8px' }}>Match 2</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortedMatches.reduce((rows, match, index) => {
+                    if (index % 2 === 0) {
+                      rows.push([match]);
+                    } else {
+                      rows[rows.length - 1].push(match);
+                    }
+                    return rows;
+                  }, []).map((row, rowIndex) => (
+                    <tr key={rowIndex}>
+                      {row.map((match) => (
+                        <td key={match.index} style={{ border: '1px solid #ddd', padding: '8px', verticalAlign: 'top' }}>
+                          <table style={{ width: '100%' }}>
+                            <tbody>
+                              <tr>
+                                <td style={{ textAlign: 'center', padding: '4px' }}>
+                                  <Typography variant="body2">
+                                    Similarity: {match.similarity.toFixed(2)}
+                                  </Typography>
+                                </td>
+                              </tr>
+                              <tr>
+                                <td style={{ padding: '4px', borderTop: '1px solid #eee' }}>
+                                  <Typography variant="body2">
+                                    {match.ojibwe_text}
+                                  </Typography>
+                                  <Typography variant="body2" sx={{ fontStyle: 'italic', color: 'text.secondary' }}>
+                                    {match.ojibwe_definition}
+                                  </Typography>
+                                </td>
+                                <td style={{ padding: '4px', borderTop: '1px solid #eee' }}>
+                                  <Typography variant="body2">
+                                    {match.english_text}
+                                  </Typography>
+                                  <Typography variant="body2" sx={{ fontStyle: 'italic', color: 'text.secondary' }}>
+                                    {match.english_definition}
+                                  </Typography>
+                                </td>
+                              </tr>
+                            </tbody>
+                          </table>
+                        </td>
+                      ))}
+                      {row.length === 1 && <td style={{ border: '1px solid #ddd' }}></td>}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </Box>
           </CardContent>
         </Card>
@@ -206,12 +240,34 @@ function Research() {
             </Typography>
             <Box sx={{ maxHeight: '400px', overflowY: 'auto' }}>
               <List>
-                {missing.map((word, index) => (
+                {currentMissing.map((word, index) => (
                   <ListItem key={index}>
                     <ListItemText primary={word.english_text} />
                   </ListItem>
                 ))}
               </List>
+            </Box>
+            <Box sx={{ display: 'flex', justifyContent: 'center', mt: 2 }}>
+              <Button
+                variant="contained"
+                color="primary"
+                disabled={missingPage === 0}
+                onClick={() => setMissingPage(missingPage - 1)}
+                sx={{ mr: 1 }}
+              >
+                Previous
+              </Button>
+              <Typography variant="body1" sx={{ mx: 2, alignSelf: 'center' }}>
+                Page {missingPage + 1} of {Math.ceil(missing.length / wordsPerPage)}
+              </Typography>
+              <Button
+                variant="contained"
+                color="primary"
+                disabled={(missingPage + 1) * wordsPerPage >= missing.length}
+                onClick={() => setMissingPage(missingPage + 1)}
+              >
+                Next
+              </Button>
             </Box>
           </CardContent>
         </Card>

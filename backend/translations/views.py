@@ -1,5 +1,7 @@
-"""API views for translation gap analysis, dictionary updates, and data access."""
-import requests
+# backend/translations/views.py
+"""
+API views for translation gap analysis, dictionary updates, and data access.
+"""
 import sqlite3
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -19,7 +21,6 @@ import os
 # Base directory
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-
 class UpdateDictionaryView(APIView):
     def get(self, request):
         """API endpoint to check for and apply updates to the English dictionary.
@@ -35,20 +36,17 @@ class UpdateDictionaryView(APIView):
         except Exception as e:
             return Response({"status": "error", "message": str(e)}, status=500)
 
-
 class EnglishToOjibweListView(APIView):
     def get(self, request):
         translations = get_all_english_to_ojibwe()
         serializer = EnglishToOjibweSerializer(translations, many=True)
         return Response(serializer.data)
 
-
 class OjibweToEnglishListView(APIView):
     def get(self, request):
         translations = get_all_ojibwe_to_english()
         serializer = OjibweToEnglishSerializer(translations, many=True)
         return Response(serializer.data)
-
 
 class SemanticMatchesView(APIView):
     def get(self, request):
@@ -62,21 +60,32 @@ class SemanticMatchesView(APIView):
         serializer = SemanticMatchSerializer(matches, many=True)
         return Response(serializer.data)
 
-
 class MissingCommonTranslationsView(APIView):
     def get(self, request):
-        # Get the top 1000 most common English words
-        top_n = 1000
-        sorted_words = sorted(WORD_FREQUENCIES.items(), key=lambda x: x[1], reverse=True)[:top_n]
-        common_words = {word.lower() for word, _ in sorted_words if len(word) >= 2}  # Filter out words shorter than 2 characters
+        """Fetch all English words missing Ojibwe translations, sorted by frequency."""
+        # Get all English words from SQLite
+        conn = sqlite3.connect("translations.db")
+        cursor = conn.cursor()
+        cursor.execute("SELECT word FROM english_dict")
+        english_words = {row[0].lower() for row in cursor.fetchall()}
+        conn.close()
 
         # Get existing translations
         translations = get_all_english_to_ojibwe()
-        translated_english = {t["english_text"].lower() if isinstance(t["english_text"], str) else t["english_text"][0].lower() for t in translations}
+        translated_english = {
+            t["english_text"].lower() if isinstance(t["english_text"], str) else t["english_text"][0].lower()
+            for t in translations
+        }
 
-        # Identify missing common words
-        missing_words = common_words - translated_english
-        missing_words = sorted(missing_words, key=lambda x: WORD_FREQUENCIES.get(x, 0), reverse=True)
+        # Identify missing words
+        missing_words = english_words - translated_english
+
+        # Sort by frequency
+        missing_words = sorted(
+            missing_words,
+            key=lambda x: WORD_FREQUENCIES.get(x, 0),
+            reverse=True
+        )
 
         # Convert to the expected format
         missing_data = [{"english_text": word} for word in missing_words]
