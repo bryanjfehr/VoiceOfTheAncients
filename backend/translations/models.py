@@ -1,19 +1,18 @@
-# backend/translations/models.py
 """
 Models for translation data management using Firestore and Django ORM for SQLite.
 
-This module manages local SQLite storage and Firestore syncing with versioning.
-It ensures all validated entries are synced without version skipping.
+This module manages local SQLite storage and Firestore syncing, ensuring all entries
+are pushed to Firestore with a consistent version, suitable for online deployment (e.g., GKE).
 """
-
 import logging
 import os
 import re
 from typing import List
 
 from django.db import models
+from tqdm import tqdm
 
-# Try to import Firebase dependencies, handle if not available
+# Attempt Firebase import with fallback for local development
 try:
     import firebase_admin
     from firebase_admin import credentials, firestore
@@ -29,8 +28,12 @@ logger = logging.getLogger("translations.models")
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 cred_path = os.path.join(BASE_DIR, "firebase_credentials.json")
 
+# Global Firestore client
+db = None
+
+
 def initialize_firebase():
-    """Initialize Firebase app if not already done."""
+    """Initialize Firebase app if not already initialized."""
     if not FIREBASE_AVAILABLE:
         logger.error("Firebase is not available. Cannot initialize.")
         return None
@@ -43,10 +46,9 @@ def initialize_firebase():
             return None
     return firestore.client()
 
-db = None
 
 def get_firestore_client():
-    """Get Firestore client, initializing if necessary."""
+    """Get or initialize Firestore client."""
     global db
     if not FIREBASE_AVAILABLE:
         logger.warning("Firestore client unavailable due to missing dependencies.")
@@ -55,8 +57,9 @@ def get_firestore_client():
         db = initialize_firebase()
     return db
 
+
 def get_collections():
-    """Get Firestore collections."""
+    """Retrieve Firestore collection references."""
     client = get_firestore_client()
     if client is None:
         logger.warning("Cannot access Firestore collections: client is None.")
@@ -77,8 +80,9 @@ def get_collections():
         "missing_translations": client.collection("missing_translations"),
     }
 
+
 def sanitize_document_id(text: str) -> str:
-    """Sanitize text for Firestore document IDs."""
+    """Sanitize text for use as Firestore document IDs."""
     if not isinstance(text, str):
         text = str(text)
     text = re.sub(r"[\n\r\s]+", "_", text.strip())
@@ -86,6 +90,7 @@ def sanitize_document_id(text: str) -> str:
     if len(text.encode("utf-8")) > 1500:
         text = text[:500]
     return text or "unknown"
+
 
 # Django models for local SQLite storage
 
@@ -99,6 +104,7 @@ class EnglishToOjibweLocal(models.Model):
     class Meta:
         db_table = "english_to_ojibwe_local"
 
+
 class OjibweToEnglishLocal(models.Model):
     """Local SQLite model for Ojibwe-to-English translations."""
     ojibwe_text = models.TextField()
@@ -107,6 +113,7 @@ class OjibweToEnglishLocal(models.Model):
 
     class Meta:
         db_table = "ojibwe_to_english_local"
+
 
 class SemanticMatchLocal(models.Model):
     """Local SQLite model for semantic matches."""
@@ -120,6 +127,7 @@ class SemanticMatchLocal(models.Model):
     class Meta:
         db_table = "semantic_matches_local"
 
+
 class MissingTranslationLocal(models.Model):
     """Local SQLite model for missing translations."""
     english_text = models.TextField()
@@ -129,8 +137,9 @@ class MissingTranslationLocal(models.Model):
     class Meta:
         db_table = "missing_translations_local"
 
+
 class EnglishWord(models.Model):
-    """SQLite model for English words."""
+    """SQLite model for English dictionary words."""
     word = models.TextField(primary_key=True)
 
     class Meta:
@@ -139,12 +148,13 @@ class EnglishWord(models.Model):
     def __str__(self) -> str:
         return self.word
 
-# Functions to create entries in local SQLite
+
+# SQLite creation functions
 
 def create_english_to_ojibwe_local(
     english_text: str, ojibwe_text: str, definition: str = "", version: str = "1.0"
 ) -> None:
-    """Insert English-to-Ojibwe translation into SQLite."""
+    """Insert an English-to-Ojibwe translation into SQLite."""
     try:
         formatted_def = format_definition(definition) if definition else ""
         if definition and not formatted_def:
@@ -160,10 +170,11 @@ def create_english_to_ojibwe_local(
     except Exception as e:
         logger.error(f"Error creating English-to-Ojibwe in SQLite: {e}")
 
+
 def create_ojibwe_to_english_local(
     ojibwe_text: str, english_text: list, version: str = "1.0"
 ) -> None:
-    """Insert Ojibwe-to-English translation into SQLite."""
+    """Insert an Ojibwe-to-English translation into SQLite."""
     try:
         OjibweToEnglishLocal.objects.create(
             ojibwe_text=ojibwe_text.lower(),
@@ -174,11 +185,16 @@ def create_ojibwe_to_english_local(
     except Exception as e:
         logger.error(f"Error creating Ojibwe-to-English in SQLite: {e}")
 
+
 def create_semantic_match_local(
-    english_text: str, ojibwe_text: str, similarity: float,
-    english_definition: str = "", ojibwe_definition: str = "", version: str = "1.0"
+    english_text: str,
+    ojibwe_text: str,
+    similarity: float,
+    english_definition: str = "",
+    ojibwe_definition: str = "",
+    version: str = "1.0",
 ) -> None:
-    """Insert semantic match into SQLite."""
+    """Insert a semantic match into SQLite."""
     try:
         SemanticMatchLocal.objects.create(
             english_text=english_text.lower(),
@@ -192,10 +208,11 @@ def create_semantic_match_local(
     except Exception as e:
         logger.error(f"Error creating semantic match in SQLite: {e}")
 
+
 def create_missing_translation_local(
     english_text: str, frequency: float = 0.0, version: str = "1.0"
 ) -> None:
-    """Insert missing translation into SQLite."""
+    """Insert a missing translation into SQLite."""
     try:
         MissingTranslationLocal.objects.create(
             english_text=english_text.lower(),
@@ -206,12 +223,13 @@ def create_missing_translation_local(
     except Exception as e:
         logger.error(f"Error creating missing translation in SQLite: {e}")
 
-# Functions to retrieve all entries from local SQLite
 
-def get_all_english_to_ojibwe_local(version: str = "1.0") -> list[dict]:
-    """Retrieve all English-to-Ojibwe translations from SQLite."""
+# SQLite retrieval functions (fetch all entries, ignoring version)
+
+def get_all_english_to_ojibwe_local() -> List[dict]:
+    """Retrieve all English-to-Ojibwe translations from SQLite, regardless of version."""
     try:
-        entries = EnglishToOjibweLocal.objects.filter(version=version)
+        entries = EnglishToOjibweLocal.objects.all()
         result = [
             {
                 "english_text": e.english_text,
@@ -220,30 +238,32 @@ def get_all_english_to_ojibwe_local(version: str = "1.0") -> list[dict]:
             }
             for e in entries
         ]
-        logger.info(f"Retrieved {len(result)} English-to-Ojibwe from SQLite.")
+        logger.info(f"Retrieved {len(result)} English-to-Ojibwe entries from SQLite.")
         return result
     except Exception as e:
         logger.error(f"Error retrieving English-to-Ojibwe from SQLite: {e}")
         return []
 
-def get_all_ojibwe_to_english_local(version: str = "1.0") -> list[dict]:
-    """Retrieve all Ojibwe-to-English translations from SQLite."""
+
+def get_all_ojibwe_to_english_local() -> List[dict]:
+    """Retrieve all Ojibwe-to-English translations from SQLite, regardless of version."""
     try:
-        entries = OjibweToEnglishLocal.objects.filter(version=version)
+        entries = OjibweToEnglishLocal.objects.all()
         result = [
             {"ojibwe_text": e.ojibwe_text, "english_text": e.english_text}
             for e in entries
         ]
-        logger.info(f"Retrieved {len(result)} Ojibwe-to-English from SQLite.")
+        logger.info(f"Retrieved {len(result)} Ojibwe-to-English entries from SQLite.")
         return result
     except Exception as e:
         logger.error(f"Error retrieving Ojibwe-to-English from SQLite: {e}")
         return []
 
-def get_all_semantic_matches_local(version: str = "1.0") -> list[dict]:
-    """Retrieve all semantic matches from SQLite."""
+
+def get_all_semantic_matches_local() -> List[dict]:
+    """Retrieve all semantic matches from SQLite, regardless of version."""
     try:
-        entries = SemanticMatchLocal.objects.filter(version=version)
+        entries = SemanticMatchLocal.objects.all()
         result = [
             {
                 "english_text": e.english_text,
@@ -260,15 +280,13 @@ def get_all_semantic_matches_local(version: str = "1.0") -> list[dict]:
         logger.error(f"Error retrieving semantic matches from SQLite: {e}")
         return []
 
-def get_all_missing_translations_local(version: str = "1.0") -> list[dict]:
-    """Retrieve all missing translations from SQLite."""
+
+def get_all_missing_translations_local() -> List[dict]:
+    """Retrieve all missing translations from SQLite, regardless of version."""
     try:
-        entries = MissingTranslationLocal.objects.filter(version=version)
+        entries = MissingTranslationLocal.objects.all()
         result = [
-            {
-                "english_text": e.english_text,
-                "frequency": e.frequency,
-            }
+            {"english_text": e.english_text, "frequency": e.frequency}
             for e in entries
         ]
         logger.info(f"Retrieved {len(result)} missing translations from SQLite.")
@@ -277,12 +295,13 @@ def get_all_missing_translations_local(version: str = "1.0") -> list[dict]:
         logger.error(f"Error retrieving missing translations from SQLite: {e}")
         return []
 
-# Firestore interaction functions
+
+# Firestore utility functions
 
 def get_firestore_version() -> str:
-    """Retrieve current Firestore version."""
+    """Retrieve the current version from Firestore."""
     if not FIREBASE_AVAILABLE:
-        logger.warning("Firestore unavailable. Returning default version.")
+        logger.warning("Firestore unavailable. Returning default version '1.0'.")
         return "1.0"
     try:
         version_doc = get_collections()["version"].document("current_version").get()
@@ -293,8 +312,9 @@ def get_firestore_version() -> str:
         logger.error(f"Error retrieving Firestore version: {e}")
         return "1.0"
 
+
 def set_firestore_version(version: str) -> None:
-    """Set Firestore version."""
+    """Set the Firestore version."""
     if not FIREBASE_AVAILABLE:
         logger.warning("Firestore unavailable. Skipping version set.")
         return
@@ -304,102 +324,224 @@ def set_firestore_version(version: str) -> None:
     except Exception as e:
         logger.error(f"Error setting Firestore version: {e}")
 
+
+def check_english_dict_in_firestore() -> int:
+    """
+    Check the number of documents in the Firestore english_dict collection using metadata.
+
+    Uses a metadata document to store the count, avoiding slow streaming of all documents.
+    Returns:
+        int: Number of documents in the Firestore english_dict collection, or 0 if unavailable.
+    """
+    if not FIREBASE_AVAILABLE:
+        logger.warning("Firestore unavailable. Assuming english_dict is not present.")
+        return 0
+    try:
+        # Use a metadata document to store the count of english_dict entries
+        metadata_ref = get_collections()["english_dict"].document("_metadata")
+        metadata_doc = metadata_ref.get()
+        if metadata_doc.exists:
+            count = metadata_doc.to_dict().get("count", 0)
+            logger.info(f"Found {count} documents in Firestore english_dict per metadata.")
+            return count
+        # If metadata doesn't exist, check if the collection has any documents
+        docs = get_collections()["english_dict"].limit(1).stream()
+        has_documents = any(docs)
+        count = -1 if has_documents else 0  # -1 indicates unknown count but populated
+        logger.info(f"Metadata not found. Collection {'has' if has_documents else 'has no'} documents.")
+        return count
+    except Exception as e:
+        logger.error(f"Error checking Firestore english_dict: {e}")
+        return 0
+
+
 def sync_english_dict_to_firestore() -> None:
-    """Sync English dictionary from SQLite to Firestore."""
+    """
+    Sync English dictionary from SQLite to Firestore efficiently with batched writes.
+
+    Only syncs if Firestore's english_dict collection is empty or has significantly fewer
+    entries than SQLite, based on metadata. Updates metadata count after syncing.
+    """
     if not FIREBASE_AVAILABLE:
         logger.warning("Firestore unavailable. Skipping English dict sync.")
         return
+
     try:
-        words = EnglishWord.objects.all()
-        logger.info(f"Syncing {len(words)} English words to Firestore.")
-        for word in words:
+        # Count local English words in SQLite
+        local_words = EnglishWord.objects.all()
+        local_count = len(local_words)
+        logger.info(f"Found {local_count} English words in SQLite.")
+
+        # Check Firestore for existing english_dict count via metadata
+        firestore_count = check_english_dict_in_firestore()
+        threshold = int(local_count * 0.9)  # 90% threshold
+
+        if firestore_count == -1:
+            logger.info("Firestore english_dict is populated but count unknown. Skipping sync.")
+            return
+        elif firestore_count >= threshold:
+            logger.info(
+                f"Firestore has {firestore_count} English words, sufficient "
+                f"(threshold: {threshold}). Skipping sync."
+            )
+            return
+
+        logger.info(
+            f"Firestore has {firestore_count} English words, below threshold "
+            f"({threshold}). Syncing {local_count} words to Firestore."
+        )
+
+        # Use batched writes for efficiency (max 500 operations per batch)
+        batch = get_firestore_client().batch()
+        batch_count = 0
+        total_synced = 0
+
+        for word in tqdm(local_words, desc="Syncing English dictionary", unit="word"):
             doc_id = sanitize_document_id(word.word)
             doc_ref = get_collections()["english_dict"].document(doc_id)
-            doc_ref.set({"word": word.word.lower()})
-            logger.debug(f"Synced English word to Firestore: {word.word}")
+            batch.set(doc_ref, {"word": word.word.lower()})
+            batch_count += 1
+            total_synced += 1
+
+            if batch_count >= 500:
+                batch.commit()
+                logger.debug(f"Committed batch of {batch_count} English words.")
+                batch = get_firestore_client().batch()
+                batch_count = 0
+
+        # Commit any remaining operations
+        if batch_count > 0:
+            batch.commit()
+            logger.debug(f"Committed final batch of {batch_count} English words.")
+
+        # Update metadata with the new count
+        metadata_ref = get_collections()["english_dict"].document("_metadata")
+        metadata_ref.set({"count": local_count})
+        logger.info(f"Synced {total_synced} English words to Firestore and updated metadata.")
     except Exception as e:
         logger.error(f"Error syncing English dict to Firestore: {e}")
         raise
 
+
 def sync_to_firestore(version: str = "1.0") -> None:
     """
-    Sync SQLite data to Firestore, always syncing all entries.
+    Sync all SQLite data to Firestore efficiently with batched writes.
+
+    Pushes all entries regardless of version, updating Firestore with the specified version.
+    Args:
+        version (str): Version to set in Firestore after syncing (default: "1.0").
+    Raises:
+        RuntimeError: If Firestore is unavailable or sync fails critically.
     """
     if not FIREBASE_AVAILABLE:
-        logger.warning("Firestore unavailable. Skipping sync.")
-        return
+        logger.error("Firestore unavailable. Cannot sync data.")
+        raise RuntimeError("Firestore is unavailable. Cannot sync data.")
+
+    client = get_firestore_client()
     try:
         # Sync English-to-Ojibwe
-        entries = get_all_english_to_ojibwe_local(version)
+        entries = get_all_english_to_ojibwe_local()
         logger.info(f"Syncing {len(entries)} English-to-Ojibwe entries to Firestore.")
-        for entry in entries:
+        batch = client.batch()
+        batch_count = 0
+        for entry in tqdm(entries, desc="Syncing English-to-Ojibwe", unit="entry"):
             if entry["definition"] and not is_valid_definition(entry["definition"]):
                 logger.warning(f"Skipping invalid definition for '{entry['english_text']}': {entry['definition']}")
                 continue
             formatted_def = format_definition(entry["definition"]) if entry["definition"] else ""
             doc_id = sanitize_document_id(entry["english_text"])
             doc_ref = get_collections()["english_to_ojibwe"].document(doc_id)
-
-            def set_doc():
-                doc_ref.set({
-                    "english_text": entry["english_text"],
-                    "ojibwe_text": entry["ojibwe_text"],
-                    "definition": formatted_def,
-                })
-            set_doc()
-            logger.debug(f"Synced English-to-Ojibwe: {entry['english_text']}")
-
-        # Sync Ojibwe-to-English
-        entries = get_all_ojibwe_to_english_local(version)
-        logger.info(f"Syncing {len(entries)} Ojibwe-to-English entries to Firestore.")
-        for entry in entries:
-            doc_id = sanitize_document_id(entry["ojibwe_text"])
-            doc_ref = get_collections()["ojibwe_to_english"].document(doc_id)
-
-            def set_doc():
-                doc_ref.set({
-                    "ojibwe_text": entry["ojibwe_text"],
-                    "english_text": entry["english_text"],
-                })
-            set_doc()
-            logger.debug(f"Synced Ojibwe-to-English: {entry['ojibwe_text']}")
-
-        # Sync semantic matches
-        entries = get_all_semantic_matches_local(version)
-        logger.info(f"Syncing {len(entries)} semantic matches to Firestore.")
-        for entry in entries:
-            doc_id = sanitize_document_id(f"{entry['english_text']}_{entry['ojibwe_text']}")
-            doc_ref = get_collections()["semantic_matches"].document(doc_id)
-            doc_ref.set({
+            batch.set(doc_ref, {
                 "english_text": entry["english_text"],
                 "ojibwe_text": entry["ojibwe_text"],
-                "similarity": entry["similarity"],
-                "english_definition": entry["english_definition"] or "",
-                "ojibwe_definition": entry["ojibwe_definition"] or "",
+                "definition": formatted_def,
             })
-            logger.debug(f"Synced semantic match: {entry['english_text']} => {entry['ojibwe_text']}")
+            batch_count += 1
+            if batch_count >= 500:
+                batch.commit()
+                batch = client.batch()
+                batch_count = 0
+        if batch_count > 0:
+            batch.commit()
+
+        # Sync Ojibwe-to-English
+        entries = get_all_ojibwe_to_english_local()
+        logger.info(f"Syncing {len(entries)} Ojibwe-to-English entries to Firestore.")
+        batch = client.batch()
+        batch_count = 0
+        for entry in tqdm(entries, desc="Syncing Ojibwe-to-English", unit="entry"):
+            doc_id = sanitize_document_id(entry["ojibwe_text"])
+            doc_ref = get_collections()["ojibwe_to_english"].document(doc_id)
+            batch.set(doc_ref, {
+                "ojibwe_text": entry["ojibwe_text"],
+                "english_text": entry["english_text"],
+            })
+            batch_count += 1
+            if batch_count >= 500:
+                batch.commit()
+                batch = client.batch()
+                batch_count = 0
+        if batch_count > 0:
+            batch.commit()
+
+        # Sync semantic matches
+        entries = get_all_semantic_matches_local()
+        if not entries:
+            logger.warning("No semantic matches found in SQLite. Ensure semantic analysis has been run.")
+        else:
+            logger.info(f"Syncing {len(entries)} semantic matches to Firestore.")
+            batch = client.batch()
+            batch_count = 0
+            for entry in tqdm(entries, desc="Syncing semantic matches", unit="match"):
+                doc_id = sanitize_document_id(f"{entry['english_text']}_{entry['ojibwe_text']}")
+                doc_ref = get_collections()["semantic_matches"].document(doc_id)
+                batch.set(doc_ref, {
+                    "english_text": entry["english_text"],
+                    "ojibwe_text": entry["ojibwe_text"],
+                    "similarity": entry["similarity"],
+                    "english_definition": entry["english_definition"] or "",
+                    "ojibwe_definition": entry["ojibwe_definition"] or "",
+                })
+                batch_count += 1
+                if batch_count >= 500:
+                    batch.commit()
+                    batch = client.batch()
+                    batch_count = 0
+            if batch_count > 0:
+                batch.commit()
 
         # Sync missing translations
-        entries = get_all_missing_translations_local(version)
+        entries = get_all_missing_translations_local()
         logger.info(f"Syncing {len(entries)} missing translations to Firestore.")
-        for entry in entries:
+        batch = client.batch()
+        batch_count = 0
+        for entry in tqdm(entries, desc="Syncing missing translations", unit="entry"):
             doc_id = sanitize_document_id(entry["english_text"])
             doc_ref = get_collections()["missing_translations"].document(doc_id)
-            doc_ref.set({
+            batch.set(doc_ref, {
                 "english_text": entry["english_text"],
                 "frequency": entry["frequency"],
             })
-            logger.debug(f"Synced missing translation: {entry['english_text']}")
+            batch_count += 1
+            if batch_count >= 500:
+                batch.commit()
+                batch = client.batch()
+                batch_count = 0
+        if batch_count > 0:
+            batch.commit()
 
+        # Set the specified version in Firestore
         set_firestore_version(version)
+        logger.info(f"Sync completed successfully with version {version}.")
     except Exception as e:
         logger.error(f"Error syncing to Firestore: {e}")
-        raise
+        raise RuntimeError(f"Error syncing to Firestore: {e}")
 
-# Functions to interact with Firestore directly
+
+# Firestore direct interaction functions (unchanged)
 
 def create_english_to_ojibwe(english_text: str, ojibwe_text: str) -> None:
-    """Insert English-to-Ojibwe translation into Firestore."""
+    """Insert English-to-Ojibwe translation directly into Firestore."""
     if not FIREBASE_AVAILABLE:
         logger.warning("Firestore unavailable. Skipping create.")
         return
@@ -413,8 +555,9 @@ def create_english_to_ojibwe(english_text: str, ojibwe_text: str) -> None:
     except Exception as e:
         logger.error(f"Error creating English-to-Ojibwe in Firestore: {e}")
 
+
 def create_ojibwe_to_english(ojibwe_text: str, english_text: list) -> None:
-    """Insert Ojibwe-to-English translation into Firestore."""
+    """Insert Ojibwe-to-English translation directly into Firestore."""
     if not FIREBASE_AVAILABLE:
         logger.warning("Firestore unavailable. Skipping create.")
         return
@@ -428,10 +571,11 @@ def create_ojibwe_to_english(ojibwe_text: str, english_text: list) -> None:
     except Exception as e:
         logger.error(f"Error creating Ojibwe-to-English in Firestore: {e}")
 
+
 def update_or_create_english_to_ojibwe(
     english_text: str, ojibwe_text: str, definition: str = ""
 ) -> None:
-    """Update or create English-to-Ojibwe in Firestore."""
+    """Update or create English-to-Ojibwe translation in Firestore."""
     if not FIREBASE_AVAILABLE:
         logger.warning("Firestore unavailable. Skipping update/create.")
         return
@@ -456,8 +600,9 @@ def update_or_create_english_to_ojibwe(
     except Exception as e:
         logger.error(f"Error updating/creating English-to-Ojibwe in Firestore: {e}")
 
+
 def update_or_create_ojibwe_to_english(ojibwe_text: str, english_text: list) -> None:
-    """Update or create Ojibwe-to-English in Firestore."""
+    """Update or create Ojibwe-to-English translation in Firestore."""
     if not FIREBASE_AVAILABLE:
         logger.warning("Firestore unavailable. Skipping update/create.")
         return
@@ -476,10 +621,11 @@ def update_or_create_ojibwe_to_english(ojibwe_text: str, english_text: list) -> 
     except Exception as e:
         logger.error(f"Error updating/creating Ojibwe-to-English in Firestore: {e}")
 
-# Functions to retrieve all entries from Firestore or fallback to SQLite
 
-def get_all_english_to_ojibwe() -> list[dict]:
-    """Retrieve all English-to-Ojibwe translations from Firestore, fall back to SQLite if Firestore is unavailable."""
+# Firestore retrieval functions with SQLite fallback
+
+def get_all_english_to_ojibwe() -> List[dict]:
+    """Retrieve all English-to-Ojibwe translations from Firestore, falling back to SQLite."""
     if FIREBASE_AVAILABLE:
         try:
             docs = get_collections()["english_to_ojibwe"].stream()
@@ -491,8 +637,9 @@ def get_all_english_to_ojibwe() -> list[dict]:
     logger.warning("Falling back to SQLite for English-to-Ojibwe translations.")
     return get_all_english_to_ojibwe_local()
 
-def get_all_ojibwe_to_english() -> list[dict]:
-    """Retrieve all Ojibwe-to-English translations from Firestore, fall back to SQLite if Firestore is unavailable."""
+
+def get_all_ojibwe_to_english() -> List[dict]:
+    """Retrieve all Ojibwe-to-English translations from Firestore, falling back to SQLite."""
     if FIREBASE_AVAILABLE:
         try:
             docs = get_collections()["ojibwe_to_english"].stream()
@@ -504,8 +651,9 @@ def get_all_ojibwe_to_english() -> list[dict]:
     logger.warning("Falling back to SQLite for Ojibwe-to-English translations.")
     return get_all_ojibwe_to_english_local()
 
-def get_all_semantic_matches() -> list[dict]:
-    """Retrieve all semantic matches from Firestore, fall back to SQLite if Firestore is unavailable."""
+
+def get_all_semantic_matches() -> List[dict]:
+    """Retrieve all semantic matches from Firestore, falling back to SQLite."""
     if FIREBASE_AVAILABLE:
         try:
             docs = get_collections()["semantic_matches"].stream()
@@ -517,8 +665,9 @@ def get_all_semantic_matches() -> list[dict]:
     logger.warning("Falling back to SQLite for semantic matches.")
     return get_all_semantic_matches_local()
 
-def get_all_missing_translations() -> list[dict]:
-    """Retrieve all missing translations from Firestore, fall back to SQLite if Firestore is unavailable."""
+
+def get_all_missing_translations() -> List[dict]:
+    """Retrieve all missing translations from Firestore, falling back to SQLite."""
     if FIREBASE_AVAILABLE:
         try:
             docs = get_collections()["missing_translations"].stream()

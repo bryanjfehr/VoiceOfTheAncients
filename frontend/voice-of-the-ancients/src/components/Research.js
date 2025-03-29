@@ -66,7 +66,9 @@ function Research() {
     api.get('/api/missing-common-translations/')
       .then(response => {
         console.log('Missing Common Translations:', response.data);
-        setMissing(response.data);
+        // Sort by frequency (descending) upon receiving the data
+        const sortedMissing = [...response.data].sort((a, b) => b.frequency - a.frequency);
+        setMissing(sortedMissing);
       })
       .catch(error => {
         console.error('Error fetching missing common translations:', error);
@@ -242,7 +244,14 @@ function Research() {
               <List>
                 {currentMissing.map((word, index) => (
                   <ListItem key={index}>
-                    <ListItemText primary={word.english_text} />
+                    <ListItemText
+                      primary={word.english_text}
+                      secondary={
+                        <Typography component="span" variant="body2" sx={{ color: 'text.secondary' }}>
+                          Usage Frequency: {word.frequency.toFixed(2)}
+                        </Typography>
+                      }
+                    />
                   </ListItem>
                 ))}
               </List>

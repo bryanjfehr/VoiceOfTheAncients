@@ -21,3 +21,4 @@ djangorestframework==3.15.2   # REST API framework for Django
 keyboard==0.13.5              # Keyboard input for testing
 asgiref==3.8.1                # ASGI support for Django channels
 firebase-admin==6.5.0         # Firebase Admin SDK for Firestore integration
+gunicorn==20.1.0              # WSGI server for running Django applications
